@@ -23,7 +23,8 @@ bucket holds every song, its book and the order within each book; see
 
 After them come Music Workbook 3 (below) and **Movie Themes**, full piano
 arrangements of film music, such as Joe Hisaishi's _Summer_ from _Kikujiro_.
-They have no suggested finger numbers; their hands are suggested by pitch.
+Their hands, finger numbers and starting positions are suggestions worked out
+from the notes, not from a printed score.
 
 Books start folded; click one to open it. Searching opens them all, and moving
 to a song in another book opens that one.
