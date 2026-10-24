@@ -37,12 +37,21 @@ const fixtureSongs = (
 const fixture = (id: string) => fixtureSongs.find((song) => song.id === id)!;
 
 /**
- * The library bucket: one song in each book of George Bear’s Classes, and one
- * from another collection that the app must leave out.
+ * The library bucket: one song in each book of George Bear’s Classes, one in
+ * Movie Themes (Ode to Joy's notes under another name), and one from another
+ * collection that the app must leave out.
  */
 export const LIBRARY = [
   { song: fixture("cadence-dancing-raindrops-v1"), book: "recital-3" },
   { song: fixture("pawpal-five-oclock-v1"), book: "lesson-3" },
+  {
+    song: {
+      ...fixture("cadence-ode-to-joy-v1"),
+      id: "e2e-film-theme-v1",
+      title: "A Film Theme",
+    },
+    collection: "movies",
+  },
   { song: fixture("cadence-ode-to-joy-v1"), collection: "songs" },
 ].map(({ song, book, collection = "classes" }) => ({
   song,

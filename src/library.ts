@@ -9,11 +9,16 @@ const TIMEOUT_MS = 30000;
  * users may read it (see supabase/migrations).
  */
 export const LIBRARY_BUCKET = "library";
-export const COLLECTION_IDS = ["classes", "songs", "pops"] as const;
+export const COLLECTION_IDS = ["classes", "songs", "pops", "movies"] as const;
 export type LibraryCollection = (typeof COLLECTION_IDS)[number];
 /** The books of George Bear’s Classes. */
 export const BOOK_IDS = ["recital-3", "lesson-3"] as const;
 export type LibraryBook = (typeof BOOK_IDS)[number];
+/**
+ * A book of the app's library: one of George Bear’s Classes, or Movie Themes,
+ * the `movies` collection as one book.
+ */
+export type SongBook = LibraryBook | "movies";
 /** The book of a classes song that names none. */
 const DEFAULT_BOOK: LibraryBook = "recital-3";
 
@@ -21,7 +26,7 @@ const DEFAULT_BOOK: LibraryBook = "recital-3";
 export interface LibraryEntry {
   id: string;
   title: string;
-  /** The app shows only `classes`; the bucket keeps the others. */
+  /** The app shows `classes` and `movies`; the bucket keeps the others. */
   collection: LibraryCollection;
   /** The class book of a `classes` song: recital-3 when left out. */
   book?: LibraryBook;
@@ -349,7 +354,8 @@ export function validateSong(value: unknown, id: string): Song {
 }
 
 /**
- * Load the songs of George Bear’s Classes, the `classes` collection. `url`
+ * Load the songs of George Bear’s Classes, the `classes` collection, and of
+ * Movie Themes, the `movies` collection. `url`
  * turns a bucket path into its URL, and `fetcher` reads it, as the signed-in
  * user in the app. The index is revalidated on every load. Song files are
  * named after their content hash and served with a one-year cache, so the
@@ -385,16 +391,22 @@ export async function loadLibrary(
   };
   const index = validateIndex(await get("index.json", true));
   // Earlier builds still show the other collections, so they stay in the bucket.
-  const classes = index.songs.filter((entry) => entry.collection === "classes");
-  if (!classes.length) fail("index.json", "George Bear’s Classes has no songs");
+  const shown = index.songs.filter(
+    (entry) => entry.collection === "classes" || entry.collection === "movies",
+  );
+  if (!shown.some((entry) => entry.collection === "classes"))
+    fail("index.json", "George Bear’s Classes has no songs");
   return Promise.all(
-    classes.map(async (entry) => {
+    shown.map(async (entry) => {
       const song = validateSong(await get(entry.song), entry.id);
       return {
         ...song,
         title: entry.title,
         library: {
-          book: entry.book ?? DEFAULT_BOOK,
+          book:
+            entry.collection === "movies"
+              ? "movies"
+              : (entry.book ?? DEFAULT_BOOK),
           midi: entry.midi ? url(entry.midi) : undefined,
         },
       };

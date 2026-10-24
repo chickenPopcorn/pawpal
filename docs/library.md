@@ -7,9 +7,10 @@ signed-in users can read it (see [who can read the buckets](#who-can-read-the-bu
 The app loads them after sign-in:
 
 - `index.json` lists the songs in order, with each one's title, collection
-  (`classes`, `songs` or `pops`) and file names. The app loads only `classes`,
-  George Bear’s Classes; the bucket also keeps the other two collections. A
-  `classes` song may name its `book`: `recital-3` (the default) or `lesson-3`.
+  (`classes`, `movies`, `songs` or `pops`) and file names. The app loads
+  `classes`, George Bear’s Classes, and `movies`, Movie Themes; the bucket also
+  keeps the other two collections. A `classes` song may name its `book`:
+  `recital-3` (the default) or `lesson-3`. Movie Themes is one book.
   Browsers check the index on every load; it is cached for 60 seconds.
 - `songs/<id>.<hash>.json` is each song in the app's format: notes, tracks,
   tempo, suggested fingering and lesson text, and for Recital Book 3 the
@@ -37,8 +38,11 @@ since a plain link would not carry the token.
 To change the library, run `npm run library:pull`, edit `./library` (ignored by
 git), then run `npm run library:push`. To add a song, put its MIDI file at
 `library/songs/<id>.mid` and add an entry to `library/index.json` with its `id`,
-`title`, `collection: "classes"`, an optional `book`, `song: "songs/<id>.json"`
-and `midi: "songs/<id>.mid"`; push converts the MIDI into the song file. Each
+`title`, `collection` (`"classes"` or `"movies"`), for a class song an optional
+`book`, `song: "songs/<id>.json"` and `midi: "songs/<id>.mid"`; push converts
+the MIDI into the song file. A build of the app rejects an index that names a
+collection it does not know, so push a song in a new collection only once the
+build that knows it is live (and 10 minutes have passed, as below). Each
 song file records the hash of the MIDI file it was built from (`sourceMidi`),
 and push refuses a MIDI file that a song file was not built from. `./library`
 uses plain names; push adds the hashes. Push checks every song (and the 5 MiB

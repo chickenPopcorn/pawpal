@@ -1,6 +1,6 @@
 import { memo, useEffect, useEffectEvent, useRef, useState } from "react";
 import { books, bookForSong, CLASSES_TITLE, songsInBook } from "./books";
-import type { LibraryBook } from "./library";
+import type { SongBook } from "./library";
 import type { Song } from "./song";
 import {
   gameName,
@@ -21,7 +21,7 @@ const pageMatches = (page: WorkbookPage, term: string) =>
   searchText(`page ${page.page} ${page.title}`).includes(term);
 const allBooks = (open: boolean) =>
   Object.fromEntries(books.map(({ id }) => [id, open])) as Record<
-    LibraryBook,
+    SongBook,
     boolean
   >;
 
@@ -74,10 +74,73 @@ export const SongLibrary = memo(function SongLibrary({
     ...book,
     songs: songsInBook(songs, book.id),
   }));
+  const classes = groups.filter((group) => group.collection === "classes");
+  const others = groups.filter((group) => group.collection !== "classes");
+  const section = (group: (typeof groups)[number]) => {
+    const visible = group.songs.filter((song) => songMatches(song, term));
+    return (
+      <section className="library-section" key={group.id}>
+        <button
+          className="library-section-toggle"
+          aria-expanded={expanded[group.id]}
+          aria-controls={`library-${group.id}`}
+          onClick={() =>
+            setExpanded((current) => ({
+              ...current,
+              [group.id]: !current[group.id],
+            }))
+          }
+        >
+          <svg viewBox="0 0 12 12" aria-hidden="true">
+            <path d="m4.5 2.5 3.5 3.5-3.5 3.5" />
+          </svg>
+          <span className="library-section-icon" aria-hidden="true">
+            {group.icon}
+          </span>
+          <span className="library-section-title">
+            <small>{group.series}</small>
+            {group.title}
+          </span>
+          <span className="library-section-count" aria-hidden="true">
+            {group.songs.length}
+          </span>
+        </button>
+        <div id={`library-${group.id}`} hidden={!expanded[group.id]}>
+          <div className="library-songs" aria-label={group.title}>
+            {visible.map((song) => (
+              <button
+                key={song.id}
+                className="song"
+                aria-pressed={song.id === selected}
+                onClick={() => onSelect(song)}
+              >
+                {song.title}
+                <small>
+                  {song.lesson
+                    ? `${song.lesson.level} · ${song.lesson.bpm} BPM · Fingering`
+                    : "Full piano · No finger numbers"}
+                </small>
+              </button>
+            ))}
+            {!visible.length && (
+              <p className="library-empty">
+                {term
+                  ? "No matches in this book."
+                  : "No songs in this book yet."}
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+    );
+  };
   return (
     <>
       <div className="nav-label">
-        {CLASSES_TITLE} <span>{songs.length}</span>
+        {CLASSES_TITLE}{" "}
+        <span>
+          {classes.reduce((sum, group) => sum + group.songs.length, 0)}
+        </span>
       </div>
       <input
         type="search"
@@ -94,64 +157,7 @@ export const SongLibrary = memo(function SongLibrary({
           }
         }}
       />
-      {groups.map((group) => {
-        const visible = group.songs.filter((song) => songMatches(song, term));
-        return (
-          <section className="library-section" key={group.id}>
-            <button
-              className="library-section-toggle"
-              aria-expanded={expanded[group.id]}
-              aria-controls={`library-${group.id}`}
-              onClick={() =>
-                setExpanded((current) => ({
-                  ...current,
-                  [group.id]: !current[group.id],
-                }))
-              }
-            >
-              <svg viewBox="0 0 12 12" aria-hidden="true">
-                <path d="m4.5 2.5 3.5 3.5-3.5 3.5" />
-              </svg>
-              <span className="library-section-icon" aria-hidden="true">
-                {group.icon}
-              </span>
-              <span className="library-section-title">
-                <small>{group.series}</small>
-                {group.title}
-              </span>
-              <span className="library-section-count" aria-hidden="true">
-                {group.songs.length}
-              </span>
-            </button>
-            <div id={`library-${group.id}`} hidden={!expanded[group.id]}>
-              <div className="library-songs" aria-label={group.title}>
-                {visible.map((song) => (
-                  <button
-                    key={song.id}
-                    className="song"
-                    aria-pressed={song.id === selected}
-                    onClick={() => onSelect(song)}
-                  >
-                    {song.title}
-                    <small>
-                      {song.lesson
-                        ? `${song.lesson.level} · ${song.lesson.bpm} BPM · Fingering`
-                        : "Full piano · No finger numbers"}
-                    </small>
-                  </button>
-                ))}
-                {!visible.length && (
-                  <p className="library-empty">
-                    {term
-                      ? "No matches in this book."
-                      : "No songs in this book yet."}
-                  </p>
-                )}
-              </div>
-            </div>
-          </section>
-        );
-      })}
+      {classes.map(section)}
       {workbook && (
         <section className="library-section">
           <button
@@ -202,6 +208,7 @@ export const SongLibrary = memo(function SongLibrary({
           </div>
         </section>
       )}
+      {others.map(section)}
     </>
   );
 });

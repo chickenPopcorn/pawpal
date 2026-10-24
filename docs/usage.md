@@ -21,6 +21,10 @@ keys and Wait for me practice, plus starting hand positions. The library
 bucket holds every song, its book and the order within each book; see
 [the song library](library.md).
 
+After them come Music Workbook 3 (below) and **Movie Themes**, full piano
+arrangements of film music, such as Joe Hisaishi's _Summer_ from _Kikujiro_.
+They have no suggested finger numbers; their hands are suggested by pitch.
+
 Books start folded; click one to open it. Searching opens them all, and moving
 to a song in another book opens that one.
 Search the classes by title or composer. **Download MIDI** saves the selected
@@ -35,7 +39,7 @@ with barlines. General MIDI players may ignore these text events.
 
 ## Music Workbook 3
 
-The library's last section is _Music for Little Mozarts, Music Workbook 3_.
+After the class books comes _Music for Little Mozarts, Music Workbook 3_.
 Each page is a game played on the piano:
 
 - **Crayon Keys** (pages 7, 9, 11, 14, 36, 37, 38 and 42) paints the named
