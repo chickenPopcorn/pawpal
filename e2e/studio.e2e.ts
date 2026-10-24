@@ -29,7 +29,10 @@ test("the studio shows George Bear’s Classes from the library", async ({
     "aria-pressed",
     "true",
   );
-  // Songs from other collections stay out of the studio.
+  // Movie Themes comes after the class books, outside their count; songs
+  // from other collections stay out of the studio.
+  await book(page, "Movie Themes").click();
+  await expect(song(page, "A Film Theme")).toBeVisible();
   await expect(page.getByText("Ode to Joy")).toHaveCount(0);
 
   // Only a signed-in request reads the MIDI file, so the page fetches it and

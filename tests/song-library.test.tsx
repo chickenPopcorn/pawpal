@@ -108,6 +108,7 @@ describe("song library", () => {
     ).toEqual([
       "Music for Little MozartsMusic Recital Book 3",
       "Music for Little MozartsMusic Lesson Book 3",
+      "Piano SolosMovie Themes",
     ]);
     expect(titles()).toEqual([
       "Dancing Raindrops",
@@ -291,7 +292,7 @@ describe("song library", () => {
       container.querySelectorAll(".library-empty"),
       (element) => element.textContent,
     );
-    expect(messages).toEqual(Array(2).fill("No matches in this book."));
+    expect(messages).toEqual(Array(3).fill("No matches in this book."));
     await type("");
     expect(titles()).toHaveLength(songs.length);
   });
@@ -304,7 +305,26 @@ describe("song library", () => {
         container.querySelectorAll(".library-empty"),
         (element) => element.textContent,
       ),
-    ).toEqual(Array(2).fill("No songs in this book yet."));
+    ).toEqual(Array(3).fill("No songs in this book yet."));
+  });
+
+  it("lists Movie Themes last, outside the classes' count", async () => {
+    const summer: Song = {
+      ...fullPiano,
+      id: "summer",
+      title: "Summer · Kikujiro",
+      source: { ...fullPiano.source!, composer: "Joe Hisaishi" },
+      library: { book: "movies" },
+    };
+    await render({ songs: [...songs, summer], selected: "summer" });
+    expect(container.querySelector(".nav-label")?.textContent).toBe(
+      "George Bear’s Classes 4",
+    );
+    expect(groupToggle("movies").textContent).toMatch(/Movie Themes *1$/);
+    expect(groupContent("movies").hidden).toBe(true);
+    await type("hisaishi");
+    expect(titles()).toEqual(["Summer · Kikujiro"]);
+    expect(groupContent("movies").hidden).toBe(false);
   });
 });
 
@@ -323,8 +343,11 @@ describe("Music Workbook 3", () => {
       Array.from(
         container.querySelectorAll(".library-section-title"),
         (title) => title.textContent,
-      ).at(-1),
-    ).toBe("Music for Little MozartsMusic Workbook 3");
+      ).slice(-2),
+    ).toEqual([
+      "Music for Little MozartsMusic Workbook 3",
+      "Piano SolosMovie Themes",
+    ]);
     expect(groupContent("workbook-3").hidden).toBe(true);
     await click(groupToggle("workbook-3"));
     const pages = Array.from(
