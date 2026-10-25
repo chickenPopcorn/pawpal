@@ -214,15 +214,16 @@ export function progress(id: string, version: string, beats: number): Progress {
   };
 }
 /**
- * Forget the signed-in account's settings, progress and upload queue on this
- * browser, such as at sign-out.
+ * Forget the signed-in account's settings, progress, practice sessions and
+ * upload queue on this browser, such as at sign-out.
  */
 export function clearAccountData() {
-  // Only what the account holds. Practice sessions belong to this browser
-  // (the account does not keep them), so the calendar keeps its history.
+  // Only what the account holds. It keeps practice sessions too, so the
+  // calendar comes back with the next sign-in, on any device.
   const account = (key: string) =>
     ["settings", "owner", "pending"].includes(key) ||
-    key.startsWith("progress:");
+    key.startsWith("progress:") ||
+    key.startsWith("practice:");
   try {
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) {

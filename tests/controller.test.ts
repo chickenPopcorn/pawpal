@@ -1825,6 +1825,7 @@ describe("account sync hooks", () => {
   const hooks = () => ({
     settings: vi.fn(),
     progress: vi.fn(),
+    practice: vi.fn(),
   });
   it("reports saved settings and progress to the account", () => {
     const sync = hooks();
@@ -1853,6 +1854,28 @@ describe("account sync hooks", () => {
       expect.objectContaining({ beat: 2, updated: expect.any(String) }),
       false,
     );
+  });
+
+  it("reports practice time to the account as it is saved", async () => {
+    const sync = hooks();
+    const studio = new Studio(fixtureLibrary(), sync);
+    active.push(studio);
+    studio.load(song([[60, 1]]));
+    await studio.play();
+    midi(studio, [0x90, 72, 80]);
+    for (let i = 0; i < 3; i++) advance(studio, 1);
+    studio.save();
+    expect(sync.practice).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        day: studio.practiceLog.today(),
+        seconds: 3,
+        songs: { "controller-fixture": 3 },
+      }),
+    );
+    // Nothing new to report when no time was added.
+    const calls = sync.practice.mock.calls.length;
+    studio.save();
+    expect(sync.practice).toHaveBeenCalledTimes(calls);
   });
 });
 

@@ -95,7 +95,14 @@ export class PracticeLog {
   /** Changes whenever a day's total does, so views can skip work. */
   revision = 0;
 
-  constructor(private clock: () => Date = () => new Date()) {
+  /**
+   * `saved` hears each session commit() saves, for the account to keep: it
+   * is called even when browser storage refused the session.
+   */
+  constructor(
+    private clock: () => Date = () => new Date(),
+    private saved: (session: PracticeSession) => void = () => {},
+  ) {
     for (const session of storedSessions())
       this.sessions.set(session.id, session);
   }
@@ -150,6 +157,7 @@ export class PracticeLog {
     };
     this.current = updated;
     const saved = write(sessionKey(updated.id), updated);
+    this.saved(updated);
     const sessions = this.withOtherTabs();
     sessions.set(updated.id, updated);
     this.sessions = sessions;
