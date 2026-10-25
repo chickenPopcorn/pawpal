@@ -6,6 +6,7 @@ import {
   UnsentChangesError,
 } from "../src/cloud";
 import { clearAccountData, read, write } from "../src/storage";
+import { addDays, localDay } from "../src/practiceLog";
 
 vi.mock("../src/storage", async (importActual) => {
   const actual = await importActual<typeof import("../src/storage")>();
@@ -15,9 +16,20 @@ vi.mock("../src/storage", async (importActual) => {
 const USER = "11111111-1111-1111-1111-111111111111";
 const OTHER = "22222222-2222-2222-2222-222222222222";
 
+interface PracticeRow {
+  id: string;
+  day: string;
+  started_at: string;
+  seconds: number;
+  songs: Record<string, number>;
+}
+
 interface Backend {
   settings: { data: unknown }[];
   progress: { song_id: string; data: unknown }[];
+  practice_sessions: PracticeRow[];
+  /** practice_sessions refuses every upload, as its checks would. */
+  refusePractice: boolean;
   upserts: [string, unknown][];
   calls: string[];
   failWrites: boolean;
@@ -41,6 +53,8 @@ function backend(): Backend {
   return {
     settings: [],
     progress: [],
+    practice_sessions: [],
+    refusePractice: false,
     upserts: [],
     calls: [],
     failWrites: false,
@@ -75,7 +89,13 @@ function client(b: Backend) {
             resolve(reply(null));
           };
         });
-      const rows = (Array.isArray(upsert[1]) ? upsert[1] : []) as {
+      if (upsert[0] === "practice_sessions" && b.refusePractice)
+        return Promise.resolve(
+          reply(null, { code: "23514", message: "check violation" }),
+        );
+      const rows = (
+        upsert[0] === "progress" && Array.isArray(upsert[1]) ? upsert[1] : []
+      ) as {
         song_id: string;
         data: unknown;
       }[];
@@ -97,8 +117,35 @@ function client(b: Backend) {
       );
     },
   });
+  /** A keyset-paged read in `column` order, of the rows `keep` takes. */
+  const ordered = (
+    table: "settings" | "progress" | "practice_sessions",
+    column: "song_id" | "id",
+    keep: (row: Record<string, unknown>) => boolean = () => true,
+  ) => {
+    let after: string | undefined;
+    let count = Infinity;
+    const query = {
+      gt: (_column: string, value: string) => ((after = value), query),
+      limit: (n: number) => ((count = n), query),
+      then: (
+        resolve: (value: unknown) => unknown,
+        reject: (error: unknown) => unknown,
+      ) =>
+        (async () => {
+          b.calls.push(`read ${table}`);
+          await b.readGate;
+          const rows = [...(b[table] as Record<string, string>[])]
+            .filter(keep)
+            .sort((x, y) => (x[column] < y[column] ? -1 : 1))
+            .filter((row) => after === undefined || row[column] > after);
+          return reply(rows.slice(0, count));
+        })().then(resolve, reject),
+    };
+    return query;
+  };
   const fake = {
-    from: (table: "settings" | "progress") => ({
+    from: (table: "settings" | "progress" | "practice_sessions") => ({
       select: (_columns?: string, options?: { count?: string }) =>
         options?.count
           ? Promise.resolve({ data: null, error: null, count: b[table].length })
@@ -119,32 +166,11 @@ function client(b: Backend) {
                   ),
                 );
               },
-              order: (column: "song_id") => {
-                let after: string | undefined;
-                let count = Infinity;
-                const query = {
-                  gt: (_column: string, value: string) => (
-                    (after = value),
-                    query
-                  ),
-                  limit: (n: number) => ((count = n), query),
-                  then: (
-                    resolve: (value: unknown) => unknown,
-                    reject: (error: unknown) => unknown,
-                  ) =>
-                    (async () => {
-                      b.calls.push(`read ${table}`);
-                      await b.readGate;
-                      const rows = [...(b[table] as { song_id: string }[])]
-                        .sort((x, y) => (x[column] < y[column] ? -1 : 1))
-                        .filter(
-                          (row) => after === undefined || row[column] > after,
-                        );
-                      return reply(rows.slice(0, count));
-                    })().then(resolve, reject),
-                };
-                return query;
-              },
+              gte: (field: "day", since: string) => ({
+                order: (column: "id") =>
+                  ordered(table, column, (row) => String(row[field]) >= since),
+              }),
+              order: (column: "song_id") => ordered(table, column),
             },
       upsert: (rows: unknown) => write(`upsert ${table}`, [table, rows]),
     }),
@@ -197,6 +223,28 @@ const queue = () =>
     progress?: Record<string, unknown>;
   } | null>("pending", null);
 const queued = () => Object.keys(queue()?.progress ?? {});
+
+const today = () => localDay(new Date());
+/** A practice session `seconds` long on `day` (today unless given). */
+function practiceSession(id: string, seconds: number, day = today()) {
+  return {
+    id,
+    day,
+    startedAt: `${day}T18:00:00.000Z`,
+    seconds,
+    songs: { song: seconds },
+  };
+}
+/** The practice_sessions row for practiceSession(). */
+function practiceRow(id: string, seconds: number, day = today()) {
+  return {
+    id,
+    day,
+    started_at: `${day}T18:00:00.000Z`,
+    seconds,
+    songs: { song: seconds },
+  };
+}
 
 describe("loading the account", () => {
   it("takes the account's settings and progress, and drops songs it lacks", async () => {
@@ -347,6 +395,7 @@ describe("loading the account", () => {
       select: () => ({
         maybeSingle: () => new Promise(() => {}),
         order: () => hang,
+        gte: () => ({ order: () => hang }),
       }),
     })) as never;
     const pull = new CloudSync(api, USER).pull();
@@ -636,7 +685,8 @@ describe("signing out", () => {
     const b = backend();
     write("owner", USER);
     write("settings", { mode: "wait" });
-    write("practice:session-1", { seconds: 300 });
+    const session = practiceSession("session-1", 300);
+    write("practice:session-1", session);
     const api = client(b);
     const sync = new CloudSync(api, USER);
     sync.progress("song", { best: 2 } as never);
@@ -644,14 +694,15 @@ describe("signing out", () => {
     expect(b.upserts).toEqual([
       ["progress", [{ user_id: USER, song_id: "song", data: { best: 2 } }]],
     ]);
+    expect(sync.pending).toBe(false);
     // Other devices keep their sessions.
     expect(api.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
     expect(clearAccountData).toHaveBeenCalledOnce();
     expect(queue()).toBeNull();
     expect(read("settings", null)).toBeNull();
     expect(read("owner", null)).toBeNull();
-    // Practice time is this browser's, not the account's: the calendar keeps it.
-    expect(read("practice:session-1", null)).toEqual({ seconds: 300 });
+    // The account keeps practice time, so this browser's copy goes too.
+    expect(read("practice:session-1", null)).toBeNull();
   });
 
   it("asks before dropping practice that could not upload", async () => {
@@ -695,5 +746,109 @@ describe("signing out", () => {
     await signing;
     expect(done).toHaveBeenCalledOnce();
     expect(clearAccountData).toHaveBeenCalledOnce();
+  });
+});
+
+describe("practice time", () => {
+  it("loads the account's recent sessions, keeping the larger copy of each", async () => {
+    const b = backend();
+    write("owner", USER);
+    const old = addDays(today(), -92);
+    b.practice_sessions = [
+      practiceRow("from-phone", 300, addDays(today(), -1)),
+      practiceRow("both", 120),
+      practiceRow("bigger-there", 200),
+      practiceRow("too-old", 500, old),
+    ];
+    write("practice:both", practiceSession("both", 180));
+    write("practice:bigger-there", practiceSession("bigger-there", 60));
+    write("practice:only-here", practiceSession("only-here", 90));
+    await new CloudSync(client(b), USER).pull();
+    expect(read("practice:from-phone", null)).toEqual(
+      practiceSession("from-phone", 300, addDays(today(), -1)),
+    );
+    expect(read("practice:bigger-there", null)).toEqual(
+      practiceSession("bigger-there", 200),
+    );
+    expect(read("practice:both", null)).toEqual(practiceSession("both", 180));
+    // Older than the calendar keeps: not loaded.
+    expect(read("practice:too-old", null)).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    // What only this browser had, or had more of, uploads.
+    expect(b.upserts).toEqual([
+      [
+        "practice_sessions",
+        expect.arrayContaining([
+          { user_id: USER, ...practiceRow("both", 180) },
+          { user_id: USER, ...practiceRow("only-here", 90) },
+        ]),
+      ],
+    ]);
+    expect((b.upserts[0][1] as unknown[]).length).toBe(2);
+    expect(queue()).toBeNull();
+  });
+
+  it("uploads a session as it gains time, and retries a failure", async () => {
+    const b = backend();
+    const sync = new CloudSync(client(b), USER);
+    sync.practice(practiceSession("s", 30));
+    sync.practice(practiceSession("s", 45));
+    expect(sync.pending).toBe(true);
+    expect(
+      Object.keys(read<{ practice?: object }>("pending", {}).practice ?? {}),
+    ).toEqual(["s"]);
+    b.failWrites = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sync.error).toMatch(/Retrying/);
+    expect(sync.pending).toBe(true);
+    b.failWrites = false;
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(b.upserts).toEqual([
+      ["practice_sessions", [{ user_id: USER, ...practiceRow("s", 45) }]],
+    ]);
+    expect(sync.error).toBe("");
+    expect(sync.pending).toBe(false);
+  });
+
+  it("drops a session the account's checks refuse instead of retrying it", async () => {
+    const b = backend();
+    b.refusePractice = true;
+    const sync = new CloudSync(client(b), USER);
+    sync.practice(practiceSession("s", 30));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sync.pending).toBe(false);
+    expect(sync.error).toBe("");
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(b.calls).toEqual(["upsert practice_sessions"]);
+  });
+
+  it("loads a queue saved before practice synced", async () => {
+    const b = backend();
+    write("owner", USER);
+    write("pending", { owner: USER, progress: { song: { best: 5 } } });
+    const sync = new CloudSync(client(b), USER);
+    await sync.pull();
+    sync.practice(practiceSession("s", 30));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(b.upserts.map(([table]) => table)).toEqual([
+      "progress",
+      "practice_sessions",
+    ]);
+  });
+
+  it("hands its practice off along with its progress", async () => {
+    const b = backend();
+    const sync = new CloudSync(client(b), USER);
+    sync.detach();
+    sync.practice(practiceSession("s", 30));
+    b.failLabels = ["upsert practice_sessions"];
+    const handing = sync.handOff();
+    await vi.advanceTimersByTimeAsync(0);
+    b.failLabels = [];
+    await vi.advanceTimersByTimeAsync(15000);
+    await handing;
+    expect(b.upserts).toEqual([
+      ["practice_sessions", [{ user_id: USER, ...practiceRow("s", 30) }]],
+    ]);
   });
 });

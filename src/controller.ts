@@ -107,8 +107,10 @@ export class Studio {
   lastSave = 0;
   /** The current song's record as last written, without its stamp. */
   private savedProgress = "";
-  /** Playing time per day, for the practice calendar. */
-  practiceLog = new PracticeLog();
+  /** Playing time per day, for the practice calendar, kept in the account too. */
+  practiceLog = new PracticeLog(undefined, (session) =>
+    this.sync?.practice(session),
+  );
   /** When a key was last pressed, on the audio clock. */
   private lastKeyAt = -Infinity;
   /** The previous tick while practice time was being counted. */

@@ -45,3 +45,33 @@ test("Sign out returns to the sign-in page", async ({ page, supabase }) => {
     page.getByRole("button", { name: "Continue with Google" }),
   ).toBeVisible();
 });
+
+test("the calendar shows practice the account keeps from another device", async ({
+  page,
+  supabase,
+}) => {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  supabase.practice.set("00000000-0000-4000-8000-0000000000a1", {
+    id: "00000000-0000-4000-8000-0000000000a1",
+    day: today,
+    started_at: `${today}T12:00:00.000Z`,
+    seconds: 300,
+    songs: { "cadence-dancing-raindrops-v1": 300 },
+  });
+  await page.goto("/");
+  await expect(
+    page.getByRole("listitem", { name: /today: 5 minutes, star earned/ }),
+  ).toBeVisible();
+
+  // The account keeps it, so signing out clears this browser's copy.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(
+    page.getByRole("button", { name: "Continue with Google" }),
+  ).toBeVisible();
+  const kept = await page.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.includes("practice:")),
+  );
+  expect(kept).toEqual([]);
+});

@@ -201,6 +201,15 @@ export const signedIn = (origin: string) => ({
 });
 
 type Row = { user_id: string; song_id: string; data: unknown };
+/** A practice_sessions row, as the app uploads it. */
+export interface PracticeRow {
+  id: string;
+  user_id?: string;
+  day: string;
+  started_at: string;
+  seconds: number;
+  songs: Record<string, number>;
+}
 
 /**
  * Supabase as the app uses it: Google sign-in (PKCE), the settings and
@@ -213,6 +222,8 @@ export class FakeSupabase {
   settings: Record<string, unknown> | null = null;
   /** The account's progress rows by song id. */
   progress = new Map<string, unknown>();
+  /** The account's practice sessions by id. */
+  practice = new Map<string, PracticeRow>();
   /** Every settings upload, oldest first. */
   settingsUploads: Record<string, unknown>[] = [];
   /** Every Google sign-in the app started. */
@@ -288,6 +299,28 @@ export class FakeSupabase {
           headers: { ...CORS, "content-range": `*/${rows.length}` },
         });
       if (method === "GET") return json(route, rows);
+    }
+
+    if (path === "/rest/v1/practice_sessions") {
+      if (method === "POST") {
+        // An upload never lowers a session's time (practice_sessions_never_shrink).
+        for (const row of [request.postDataJSON() as PracticeRow].flat()) {
+          const had = this.practice.get(row.id);
+          if (!had || had.seconds <= row.seconds)
+            this.practice.set(row.id, row);
+        }
+        return route.fulfill({ status: 201, headers: CORS, body: "" });
+      }
+      if (method === "GET") {
+        const since = url.searchParams.get("day")?.replace(/^gte\./, "") ?? "";
+        const after = url.searchParams.get("id")?.replace(/^gt\./, "") ?? "";
+        return json(
+          route,
+          [...this.practice.values()]
+            .filter((row) => row.day >= since && row.id > after)
+            .sort((a, b) => a.id.localeCompare(b.id)),
+        );
+      }
     }
 
     this.unexpected.push(`${method} ${path}`);

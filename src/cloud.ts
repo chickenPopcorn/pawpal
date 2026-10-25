@@ -8,6 +8,13 @@ import {
   type Progress,
   type Settings,
 } from "./storage";
+import {
+  addDays,
+  HISTORY_DAYS,
+  localDay,
+  storedSessions,
+  type PracticeSession,
+} from "./practiceLog";
 
 /** A burst of saves within this time becomes one upload. */
 const DEBOUNCE_MS = 2000;
@@ -19,7 +26,10 @@ const NO_RESPONSE = "The account service did not respond.";
 const RETRYING = "Changes could not be saved to your account. Retrying.";
 const FULL_ACCOUNT =
   "This account has progress for 200 songs, its limit, so progress for new songs is not saved.";
-/** Postgres refused a row a check rejects, here the progress_quota trigger. */
+/**
+ * Postgres refused a row a check rejects: for progress, the progress_quota
+ * trigger; for practice, a session the practice_sessions checks never take.
+ */
 const CHECK_VIOLATION = "23514";
 /** How many times handOff() tries, RETRY_MS apart: about an hour. */
 const HANDOFF_ATTEMPTS = 240;
@@ -102,6 +112,17 @@ interface Queue {
   owner: string;
   settings?: Settings;
   progress: Record<string, Progress>;
+  /** Practice sessions by id. Missing in a queue saved before they synced. */
+  practice?: Record<string, PracticeSession>;
+}
+
+/** A practice_sessions row as the Data API returns it. */
+interface PracticeRow {
+  id: string;
+  day: string;
+  started_at: string;
+  seconds: number;
+  songs: Record<string, number>;
 }
 
 /** What the studio reports so the signed-in account stays current. */
@@ -109,14 +130,18 @@ export interface SyncHooks {
   settings(settings: Settings): void;
   /** `loaded`: the save made as the song opens, before any practice. */
   progress(songId: string, progress: Progress, loaded?: boolean): void;
+  /** A practice session gained time. */
+  practice(session: PracticeSession): void;
 }
 
 /**
- * Keeps one user's settings and practice progress in their Supabase account.
- * The account is the record, and it merges each upload (see the
- * progress_merge trigger): the best score and the number of starts only grow,
- * so a late upload from one device never undoes practice from another. This
- * browser keeps a copy for the next load, and a queue of changes to upload.
+ * Keeps one user's settings, practice progress and practice time in their
+ * Supabase account. The account is the record, and it merges each upload
+ * (see the progress_merge trigger): the best score and the number of starts
+ * only grow, so a late upload from one device never undoes practice from
+ * another. Practice sessions only grow too (practice_sessions_never_shrink).
+ * This browser keeps a copy for the next load, and a queue of changes to
+ * upload.
  */
 export class CloudSync implements SyncHooks {
   private queue: Queue;
@@ -144,8 +169,12 @@ export class CloudSync implements SyncHooks {
     const stored = read<Queue | null>("pending", null);
     this.queue =
       stored?.owner === userId && stored.progress
-        ? stored
-        : { owner: userId, progress: {} };
+        ? { ...stored, practice: stored.practice ?? {} }
+        : { owner: userId, progress: {}, practice: {} };
+  }
+
+  private get queuedPractice() {
+    return (this.queue.practice ??= {});
   }
 
   private setError(error: string) {
@@ -156,7 +185,11 @@ export class CloudSync implements SyncHooks {
 
   /** Whether changes are waiting to upload. */
   get pending() {
-    return !!this.queue.settings || Object.keys(this.queue.progress).length > 0;
+    return (
+      !!this.queue.settings ||
+      Object.keys(this.queue.progress).length > 0 ||
+      Object.keys(this.queuedPractice).length > 0
+    );
   }
 
   /**
@@ -180,9 +213,12 @@ export class CloudSync implements SyncHooks {
       if (this.pending && this.error === FULL_ACCOUNT) await this.flush();
       if (this.pending) throw new Error(RETRYING);
     }
-    const [settings, rows] = await Promise.all([
+    // The calendar keeps HISTORY_DAYS days, today included.
+    const since = addDays(localDay(new Date()), 1 - HISTORY_DAYS);
+    const [settings, rows, practiceRows] = await Promise.all([
       timed(() => this.client.from("settings").select("data").maybeSingle()),
       this.allProgress(),
+      this.allPractice(since),
     ]);
     if (settings.error) throw settings.error;
     // A newer sign-in replaced this one while it loaded: change nothing.
@@ -228,6 +264,28 @@ export class CloudSync implements SyncHooks {
       this.syncedProgress.set(id, canon(data));
       store(`progress:${id}`, data);
     }
+
+    // Practice: each session as its larger copy, the account's or this
+    // browser's. Sessions only this browser has, such as ones played before
+    // the account kept practice, upload.
+    const account = new Map(practiceRows.map((row) => [row.id, row]));
+    for (const session of storedSessions()) {
+      if (session.day < since) continue;
+      const row = account.get(session.id);
+      if (!row || row.seconds < session.seconds)
+        this.queuedPractice[session.id] = session;
+    }
+    for (const row of practiceRows) {
+      const local = read<PracticeSession | null>(`practice:${row.id}`, null);
+      if (local && local.seconds >= row.seconds) continue;
+      store(`practice:${row.id}`, {
+        id: row.id,
+        day: row.day,
+        startedAt: row.started_at,
+        seconds: row.seconds,
+        songs: row.songs,
+      } satisfies PracticeSession);
+    }
     // The queue goes first: once the owner is recorded, the next pull no
     // longer adopts, and only the queue would keep what this one adopted.
     if (!this.savePending()) throw new BrowserStorageError();
@@ -256,6 +314,28 @@ export class CloudSync implements SyncHooks {
     }
   }
 
+  /** The account's practice sessions from `since` on, a page at a time by id. */
+  private async allPractice(since: string) {
+    const rows: PracticeRow[] = [];
+    let after: string | null = null;
+    for (;;) {
+      const page = await timed(() => {
+        const query = this.client
+          .from("practice_sessions")
+          .select("id, day, started_at, seconds, songs")
+          .gte("day", since)
+          .order("id")
+          .limit(PAGE);
+        return after === null ? query : query.gt("id", after);
+      });
+      if (page.error) throw page.error;
+      const data = page.data as PracticeRow[];
+      rows.push(...data);
+      if (data.length < PAGE || this.stopped) return rows;
+      after = data[data.length - 1].id;
+    }
+  }
+
   settings(settings: Settings) {
     if (this.stopped) return;
     if (!this.queue.settings && canon(settings) === this.syncedSettings) return;
@@ -277,6 +357,12 @@ export class CloudSync implements SyncHooks {
     )
       return;
     this.queue.progress[songId] = { ...progress };
+    this.queued();
+  }
+
+  practice(session: PracticeSession) {
+    if (this.stopped) return;
+    this.queuedPractice[session.id] = { ...session };
     this.queued();
   }
 
@@ -320,27 +406,30 @@ export class CloudSync implements SyncHooks {
       this.timer = null;
     }
     const settings = this.queue.settings,
-      progress = Object.entries(this.queue.progress);
+      progress = Object.entries(this.queue.progress),
+      practice = Object.values(this.queuedPractice);
     this.uploading = (async () => {
       // Aborting at the time limit settles the request, so it cannot land
       // after the retry that replaces it.
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
       let quotaReached = false;
+      let practiceRefused = false;
       const sent = async (
         request:
           PromiseLike<{ error: { code?: string } | null }> | false | undefined,
+        refused = () => {},
       ) => {
         if (!request) return true;
         try {
           const { error } = await request;
-          if (error?.code === CHECK_VIOLATION) quotaReached = true;
+          if (error?.code === CHECK_VIOLATION) refused();
           return !error;
         } catch {
           return false;
         }
       };
-      const [settingsOk, progressOk] = await Promise.all([
+      const [settingsOk, progressOk, practiceOk] = await Promise.all([
         sent(
           settings &&
             this.client
@@ -360,6 +449,15 @@ export class CloudSync implements SyncHooks {
                 })),
               )
               .abortSignal(controller.signal),
+          () => (quotaReached = true),
+        ),
+        sent(
+          practice.length > 0 &&
+            this.client
+              .from("practice_sessions")
+              .upsert(practice.map((session) => this.practiceRow(session)))
+              .abortSignal(controller.signal),
+          () => (practiceRefused = true),
         ),
       ]);
       clearTimeout(timer);
@@ -368,6 +466,12 @@ export class CloudSync implements SyncHooks {
         this.syncedSettings = canon(settings);
         if (this.queue.settings === settings) delete this.queue.settings;
       }
+      // Practice the account's checks refuse could never land: drop it rather
+      // than retry forever. The calendar on this browser still shows it.
+      if (practiceOk || practiceRefused)
+        for (const session of practice)
+          if (this.queuedPractice[session.id] === session)
+            delete this.queuedPractice[session.id];
       if (progressOk)
         for (const [id, data] of progress) {
           this.syncedProgress.set(id, canon(data));
@@ -412,7 +516,7 @@ export class CloudSync implements SyncHooks {
         this.full = true;
         this.setError(FULL_ACCOUNT);
         if (this.pending) this.schedule(0);
-      } else if (settingsOk && progressOk)
+      } else if (settingsOk && progressOk && (practiceOk || practiceRefused))
         // Saving the songs it has does not save the new ones it refused.
         this.setError(this.full ? FULL_ACCOUNT : "");
       else {
@@ -436,36 +540,63 @@ export class CloudSync implements SyncHooks {
   }
 
   /**
-   * After detach(), send this tab's queued progress once, then stop. Browser
-   * storage may have had no room for it, and the server merges progress, so
-   * it can land in any order. Settings are left to the other tab, which has
-   * the stored queue: an old copy from here could undo a newer choice there.
+   * After detach(), send this tab's queued progress and practice once, then
+   * stop. Browser storage may have had no room for them, and the server
+   * merges progress and keeps the larger copy of a session, so they can land
+   * in any order. Settings are left to the other tab, which has the stored
+   * queue: an old copy from here could undo a newer choice there.
    */
   async handOff() {
     while (this.uploading) await this.uploading;
     this.stop();
     const progress = Object.entries(this.queue.progress);
-    if (!progress.length) return;
+    const practice = Object.values(this.queuedPractice);
+    if (!progress.length && !practice.length) return;
     // Only this tab holds these changes, so keep trying while it is open.
     for (let attempt = 0; attempt < HANDOFF_ATTEMPTS; attempt++) {
       if (attempt)
         await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
       try {
-        const { error } = await timed((signal) =>
-          this.client
-            .from("progress")
-            .upsert(
-              progress.map(([song_id, data]) => ({
-                user_id: this.userId,
-                song_id,
-                data,
-              })),
-            )
-            .abortSignal(signal),
-        );
-        if (!error) return;
+        const [saved, played] = await Promise.all([
+          progress.length &&
+            timed((signal) =>
+              this.client
+                .from("progress")
+                .upsert(
+                  progress.map(([song_id, data]) => ({
+                    user_id: this.userId,
+                    song_id,
+                    data,
+                  })),
+                )
+                .abortSignal(signal),
+            ),
+          practice.length &&
+            timed((signal) =>
+              this.client
+                .from("practice_sessions")
+                .upsert(practice.map((session) => this.practiceRow(session)))
+                .abortSignal(signal),
+            ),
+        ]);
+        // What landed is not sent again.
+        if (saved && !saved.error) progress.length = 0;
+        if (played && (!played.error || played.error.code === CHECK_VIOLATION))
+          practice.length = 0;
+        if (!progress.length && !practice.length) return;
       } catch {}
     }
+  }
+
+  private practiceRow(session: PracticeSession) {
+    return {
+      id: session.id,
+      user_id: this.userId,
+      day: session.day,
+      started_at: session.startedAt,
+      seconds: session.seconds,
+      songs: session.songs,
+    };
   }
 
   /** Stop syncing, such as when the session ended elsewhere. Nothing more is sent. */
