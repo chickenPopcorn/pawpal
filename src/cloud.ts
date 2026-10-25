@@ -151,6 +151,8 @@ export class CloudSync implements SyncHooks {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private uploading: Promise<void> | null = null;
   private stopped = false;
+  /** pull() finished: practice this browser has but the account lacks is queued. */
+  private loaded = false;
   /** Another tab owns the studio and the stored queue; see detach(). */
   private detached = false;
   /**
@@ -290,6 +292,7 @@ export class CloudSync implements SyncHooks {
     // longer adopts, and only the queue would keep what this one adopted.
     if (!this.savePending()) throw new BrowserStorageError();
     store("owner", this.userId);
+    this.loaded = true;
     if (this.pending) this.schedule(0);
   }
 
@@ -414,7 +417,6 @@ export class CloudSync implements SyncHooks {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
       let quotaReached = false;
-      let practiceRefused = false;
       const sent = async (
         request:
           PromiseLike<{ error: { code?: string } | null }> | false | undefined,
@@ -429,7 +431,7 @@ export class CloudSync implements SyncHooks {
           return false;
         }
       };
-      const [settingsOk, progressOk, practiceOk] = await Promise.all([
+      const [settingsOk, progressOk, practiceSent] = await Promise.all([
         sent(
           settings &&
             this.client
@@ -451,14 +453,7 @@ export class CloudSync implements SyncHooks {
               .abortSignal(controller.signal),
           () => (quotaReached = true),
         ),
-        sent(
-          practice.length > 0 &&
-            this.client
-              .from("practice_sessions")
-              .upsert(practice.map((session) => this.practiceRow(session)))
-              .abortSignal(controller.signal),
-          () => (practiceRefused = true),
-        ),
+        this.sendPractice(practice, controller.signal),
       ]);
       clearTimeout(timer);
       // What landed leaves the queue, unless a newer save replaced it since.
@@ -466,12 +461,9 @@ export class CloudSync implements SyncHooks {
         this.syncedSettings = canon(settings);
         if (this.queue.settings === settings) delete this.queue.settings;
       }
-      // Practice the account's checks refuse could never land: drop it rather
-      // than retry forever. The calendar on this browser still shows it.
-      if (practiceOk || practiceRefused)
-        for (const session of practice)
-          if (this.queuedPractice[session.id] === session)
-            delete this.queuedPractice[session.id];
+      for (const session of practiceSent.settled)
+        if (this.queuedPractice[session.id] === session)
+          delete this.queuedPractice[session.id];
       if (progressOk)
         for (const [id, data] of progress) {
           this.syncedProgress.set(id, canon(data));
@@ -516,7 +508,7 @@ export class CloudSync implements SyncHooks {
         this.full = true;
         this.setError(FULL_ACCOUNT);
         if (this.pending) this.schedule(0);
-      } else if (settingsOk && progressOk && (practiceOk || practiceRefused))
+      } else if (settingsOk && progressOk && practiceSent.ok)
         // Saving the songs it has does not save the new ones it refused.
         this.setError(this.full ? FULL_ACCOUNT : "");
       else {
@@ -550,7 +542,7 @@ export class CloudSync implements SyncHooks {
     while (this.uploading) await this.uploading;
     this.stop();
     const progress = Object.entries(this.queue.progress);
-    const practice = Object.values(this.queuedPractice);
+    let practice = Object.values(this.queuedPractice);
     if (!progress.length && !practice.length) return;
     // Only this tab holds these changes, so keep trying while it is open.
     for (let attempt = 0; attempt < HANDOFF_ATTEMPTS; attempt++) {
@@ -571,21 +563,52 @@ export class CloudSync implements SyncHooks {
                 )
                 .abortSignal(signal),
             ),
-          practice.length &&
-            timed((signal) =>
-              this.client
-                .from("practice_sessions")
-                .upsert(practice.map((session) => this.practiceRow(session)))
-                .abortSignal(signal),
-            ),
+          timed((signal) => this.sendPractice(practice, signal)),
         ]);
         // What landed is not sent again.
         if (saved && !saved.error) progress.length = 0;
-        if (played && (!played.error || played.error.code === CHECK_VIOLATION))
-          practice.length = 0;
+        const settled = new Set(played.settled);
+        practice = practice.filter((session) => !settled.has(session));
         if (!progress.length && !practice.length) return;
       } catch {}
     }
+  }
+
+  /**
+   * Upload practice sessions. One refused row fails the whole upsert, so a
+   * refused batch goes again one session at a time, and only a session the
+   * account's checks refuse on its own is given up: it could never land, and
+   * the calendar on this browser still shows it. `settled` is what landed or
+   * was given up; `ok` says every request was answered.
+   */
+  private async sendPractice(
+    sessions: PracticeSession[],
+    signal: AbortSignal,
+  ): Promise<{ settled: PracticeSession[]; ok: boolean }> {
+    const upsert = async (batch: PracticeSession[]) => {
+      try {
+        const { error } = await this.client
+          .from("practice_sessions")
+          .upsert(batch.map((session) => this.practiceRow(session)))
+          .abortSignal(signal);
+        if (!error) return "landed";
+        return error.code === CHECK_VIOLATION ? "refused" : "failed";
+      } catch {
+        return "failed";
+      }
+    };
+    if (!sessions.length) return { settled: [], ok: true };
+    const whole = await upsert(sessions);
+    if (whole === "failed") return { settled: [], ok: false };
+    if (whole === "landed" || sessions.length === 1)
+      return { settled: sessions, ok: true };
+    const each = await Promise.all(
+      sessions.map((session) => upsert([session])),
+    );
+    return {
+      settled: sessions.filter((_, i) => each[i] !== "failed"),
+      ok: each.every((result) => result !== "failed"),
+    };
   }
 
   private practiceRow(session: PracticeSession) {
@@ -614,6 +637,15 @@ export class CloudSync implements SyncHooks {
    * Supabase cannot end the session.
    */
   async signOut({ force = false } = {}) {
+    // Before pull() finished, such as from a failed load, this browser cannot
+    // tell which of its sessions the account has, and sign-out clears them:
+    // send them all first. The account keeps the larger copy of each.
+    if (!force && !this.loaded && !this.stopped) {
+      const since = addDays(localDay(new Date()), 1 - HISTORY_DAYS);
+      for (const session of storedSessions())
+        if (session.day >= since) this.queuedPractice[session.id] ??= session;
+      this.savePending();
+    }
     // A forced sign-out follows one that already tried to upload.
     if (!force) await this.flush();
     if (this.pending && !force) throw new UnsentChangesError();

@@ -28,8 +28,8 @@ interface Backend {
   settings: { data: unknown }[];
   progress: { song_id: string; data: unknown }[];
   practice_sessions: PracticeRow[];
-  /** practice_sessions refuses every upload, as its checks would. */
-  refusePractice: boolean;
+  /** Sessions practice_sessions' checks refuse: an upload holding one fails whole. */
+  refusePractice: string[];
   upserts: [string, unknown][];
   calls: string[];
   failWrites: boolean;
@@ -54,7 +54,7 @@ function backend(): Backend {
     settings: [],
     progress: [],
     practice_sessions: [],
-    refusePractice: false,
+    refusePractice: [],
     upserts: [],
     calls: [],
     failWrites: false,
@@ -89,7 +89,12 @@ function client(b: Backend) {
             resolve(reply(null));
           };
         });
-      if (upsert[0] === "practice_sessions" && b.refusePractice)
+      if (
+        upsert[0] === "practice_sessions" &&
+        (upsert[1] as { id: string }[]).some((row) =>
+          b.refusePractice.includes(row.id),
+        )
+      )
         return Promise.resolve(
           reply(null, { code: "23514", message: "check violation" }),
         );
@@ -685,10 +690,13 @@ describe("signing out", () => {
     const b = backend();
     write("owner", USER);
     write("settings", { mode: "wait" });
-    const session = practiceSession("session-1", 300);
-    write("practice:session-1", session);
+    b.settings = [{ data: { mode: "wait" } }];
+    // A session the account has: nothing more to send for it.
+    b.practice_sessions = [practiceRow("session-1", 300)];
+    write("practice:session-1", practiceSession("session-1", 300));
     const api = client(b);
     const sync = new CloudSync(api, USER);
+    await sync.pull();
     sync.progress("song", { best: 2 } as never);
     await sync.signOut();
     expect(b.upserts).toEqual([
@@ -810,16 +818,43 @@ describe("practice time", () => {
     expect(sync.pending).toBe(false);
   });
 
-  it("drops a session the account's checks refuse instead of retrying it", async () => {
+  it("drops only the sessions the account's checks refuse, without retrying them", async () => {
     const b = backend();
-    b.refusePractice = true;
+    b.refusePractice = ["bad"];
     const sync = new CloudSync(client(b), USER);
-    sync.practice(practiceSession("s", 30));
+    sync.practice(practiceSession("good", 30));
+    sync.practice(practiceSession("bad", 30));
     await vi.advanceTimersByTimeAsync(2000);
+    // The refused batch goes again one session at a time.
+    expect(b.calls).toEqual(Array(3).fill("upsert practice_sessions"));
+    expect(b.upserts).toEqual([
+      ["practice_sessions", [{ user_id: USER, ...practiceRow("good", 30) }]],
+    ]);
     expect(sync.pending).toBe(false);
     expect(sync.error).toBe("");
     await vi.advanceTimersByTimeAsync(20000);
-    expect(b.calls).toEqual(["upsert practice_sessions"]);
+    expect(b.calls).toHaveLength(3);
+  });
+
+  it("keeps a session queued when its own retry fails for another reason", async () => {
+    const b = backend();
+    b.refusePractice = ["bad"];
+    b.failWrites = true;
+    const sync = new CloudSync(client(b), USER);
+    sync.practice(practiceSession("good", 30));
+    sync.practice(practiceSession("bad", 30));
+    await vi.advanceTimersByTimeAsync(2000);
+    // "bad" is refused for good; "good" only failed to send, so it waits.
+    expect(
+      Object.keys(read<{ practice?: object }>("pending", {}).practice ?? {}),
+    ).toEqual(["good"]);
+    expect(sync.error).toMatch(/Retrying/);
+    b.failWrites = false;
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(b.upserts).toEqual([
+      ["practice_sessions", [{ user_id: USER, ...practiceRow("good", 30) }]],
+    ]);
+    expect(sync.pending).toBe(false);
   });
 
   it("loads a queue saved before practice synced", async () => {
@@ -850,5 +885,43 @@ describe("practice time", () => {
     expect(b.upserts).toEqual([
       ["practice_sessions", [{ user_id: USER, ...practiceRow("s", 30) }]],
     ]);
+  });
+
+  it("hands off only the sessions the account takes", async () => {
+    const b = backend();
+    b.refusePractice = ["bad"];
+    const sync = new CloudSync(client(b), USER);
+    sync.detach();
+    sync.practice(practiceSession("good", 30));
+    sync.practice(practiceSession("bad", 30));
+    await sync.handOff();
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(b.upserts).toEqual([
+      ["practice_sessions", [{ user_id: USER, ...practiceRow("good", 30) }]],
+    ]);
+    expect(b.calls).toHaveLength(3);
+  });
+
+  it("sends this browser's sessions before signing out from a failed load", async () => {
+    const b = backend();
+    write("owner", USER);
+    write("practice:earlier", practiceSession("earlier", 300));
+    b.failReads = true;
+    const api = client(b);
+    const sync = new CloudSync(api, USER);
+    await expect(sync.pull()).rejects.toBeTruthy();
+    b.failWrites = true;
+    // Its only copy: signing out asks first.
+    await expect(sync.signOut()).rejects.toBeInstanceOf(UnsentChangesError);
+    expect(read("practice:earlier", null)).not.toBeNull();
+    b.failWrites = false;
+    await sync.signOut();
+    expect(b.upserts).toEqual([
+      [
+        "practice_sessions",
+        [{ user_id: USER, ...practiceRow("earlier", 300) }],
+      ],
+    ]);
+    expect(read("practice:earlier", null)).toBeNull();
   });
 });
