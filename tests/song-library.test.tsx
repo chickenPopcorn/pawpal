@@ -109,6 +109,7 @@ describe("song library", () => {
       "Music for Little MozartsMusic Recital Book 3",
       "Music for Little MozartsMusic Lesson Book 3",
       "Piano SolosMovie Themes",
+      "Piano SolosClassical",
     ]);
     expect(titles()).toEqual([
       "Dancing Raindrops",
@@ -292,7 +293,7 @@ describe("song library", () => {
       container.querySelectorAll(".library-empty"),
       (element) => element.textContent,
     );
-    expect(messages).toEqual(Array(3).fill("No matches in this book."));
+    expect(messages).toEqual(Array(4).fill("No matches in this book."));
     await type("");
     expect(titles()).toHaveLength(songs.length);
   });
@@ -305,10 +306,10 @@ describe("song library", () => {
         container.querySelectorAll(".library-empty"),
         (element) => element.textContent,
       ),
-    ).toEqual(Array(3).fill("No songs in this book yet."));
+    ).toEqual(Array(4).fill("No songs in this book yet."));
   });
 
-  it("lists Movie Themes last, outside the classes' count", async () => {
+  it("lists Movie Themes outside the classes' count", async () => {
     const summer: Song = {
       ...fullPiano,
       id: "summer",
@@ -325,6 +326,28 @@ describe("song library", () => {
     await type("hisaishi");
     expect(titles()).toEqual(["Summer · Kikujiro"]);
     expect(groupContent("movies").hidden).toBe(false);
+  });
+
+  it("finds and selects a classical excerpt without adding it to the classes", async () => {
+    const excerpt: Song = {
+      ...fullPiano,
+      id: "passacaglia-excerpt-v1",
+      title: "Passacaglia (opening excerpt)",
+      source: { ...fullPiano.source!, composer: "G. F. Handel" },
+      library: { book: "classical" },
+    };
+    await render({ songs: [...songs, excerpt] });
+    expect(groupToggle("classical").textContent).toMatch(/Classical *1$/);
+    expect(container.querySelector(".nav-label")?.textContent).toBe(
+      "George Bear’s Classes 4",
+    );
+    await type("handel");
+    expect(titles()).toEqual([excerpt.title]);
+    expect(groupContent("classical").hidden).toBe(false);
+    await click(
+      groupContent("classical").querySelector<HTMLButtonElement>(".song")!,
+    );
+    expect(props.onSelect).toHaveBeenCalledWith(excerpt);
   });
 });
 
@@ -343,10 +366,11 @@ describe("Music Workbook 3", () => {
       Array.from(
         container.querySelectorAll(".library-section-title"),
         (title) => title.textContent,
-      ).slice(-2),
+      ).slice(-3),
     ).toEqual([
       "Music for Little MozartsMusic Workbook 3",
       "Piano SolosMovie Themes",
+      "Piano SolosClassical",
     ]);
     expect(groupContent("workbook-3").hidden).toBe(true);
     await click(groupToggle("workbook-3"));

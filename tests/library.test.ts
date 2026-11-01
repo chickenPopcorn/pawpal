@@ -410,27 +410,30 @@ describe("song library", () => {
     expect(songCall[1].cache).toBeUndefined();
   });
 
-  it("loads Movie Themes as one book", async () => {
-    const movies = index();
-    // Ode to Joy stands in for a movie theme.
-    movies.songs[0].collection = "movies";
-    const fetcher = vi.fn(async (input: string | URL | Request) => {
-      const id = /songs\/(.+)\.0123456789abcdef\.json$/.exec(
-        String(input),
-      )?.[1];
-      return new Response(
-        JSON.stringify(
-          id ? fixtures.find(({ song }) => song.id === id)?.song : movies,
-        ),
-      );
-    });
-    const songs = await loadLibrary(url, fetcher as typeof fetch);
-    expect(songs.map((song) => [song.id, bookForSong(song).id])).toEqual([
-      [fixtures[0].song.id, "movies"],
-      [fixtures[1].song.id, "recital-3"],
-      [fixtures[2].song.id, "recital-3"],
-    ]);
-  });
+  it.each(["movies", "classical"])(
+    "loads %s as one book",
+    async (collection) => {
+      const movies = index();
+      // Ode to Joy stands in for a movie theme.
+      movies.songs[0].collection = collection;
+      const fetcher = vi.fn(async (input: string | URL | Request) => {
+        const id = /songs\/(.+)\.0123456789abcdef\.json$/.exec(
+          String(input),
+        )?.[1];
+        return new Response(
+          JSON.stringify(
+            id ? fixtures.find(({ song }) => song.id === id)?.song : movies,
+          ),
+        );
+      });
+      const songs = await loadLibrary(url, fetcher as typeof fetch);
+      expect(songs.map((song) => [song.id, bookForSong(song).id])).toEqual([
+        [fixtures[0].song.id, collection],
+        [fixtures[1].song.id, "recital-3"],
+        [fixtures[2].song.id, "recital-3"],
+      ]);
+    },
+  );
 
   it("fails clearly when George Bear’s Classes has no songs", async () => {
     const others = index();
@@ -477,7 +480,11 @@ describe("song library", () => {
   });
 
   it("puts a song without a book in Recital Book 3", () => {
-    expect(books.map((book) => book.id)).toEqual([...BOOK_IDS, "movies"]);
+    expect(books.map((book) => book.id)).toEqual([
+      ...BOOK_IDS,
+      "movies",
+      "classical",
+    ]);
     expect(bookForSong({ ...ode(), library: undefined }).id).toBe("recital-3");
     expect(bookForSong(undefined).id).toBe("recital-3");
   });

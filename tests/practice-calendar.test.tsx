@@ -55,7 +55,7 @@ describe("practice calendar", () => {
       ["2026-10-18", 185],
     ]);
     expect(container.querySelector("#practice-month")!.textContent).toBe(
-      "October",
+      "October 2026",
     );
     // October 2026 starts on a Thursday; weeks start on Monday, and each of
     // its five weeks ends with a stamp.
@@ -78,6 +78,97 @@ describe("practice calendar", () => {
     );
     expect(container.querySelector(".practice-today")!.textContent).toBe(
       "Today: 3 of 5 minutes",
+    );
+  });
+
+  it("browses across years without changing today's totals, and returns to today", async () => {
+    const onLearnerName = vi.fn(),
+      onGoalMinutes = vi.fn();
+    await render(
+      [
+        ["2025-12-31", goal],
+        ["2026-01-01", 120],
+      ],
+      "2026-01-01",
+      { onLearnerName, onGoalMinutes },
+    );
+    const clickMonth = async (label: string) =>
+      act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
+          .click(),
+      );
+    await clickMonth("Previous month");
+    expect(container.querySelector("#practice-month")!.textContent).toBe(
+      "December 2025",
+    );
+    expect(container.querySelectorAll(".practice-day")).toHaveLength(31);
+    expect(
+      container.querySelector(
+        '[aria-label="December 31: 5 minutes, star earned"]',
+      ),
+    ).not.toBeNull();
+    expect(container.querySelector(".is-today")).toBeNull();
+    expect(container.querySelector(".practice-today")!.textContent).toBe(
+      "Today: 2 of 5 minutes",
+    );
+    expect(container.querySelector(".practice-streak")!.textContent).toBe(
+      "1-day streak",
+    );
+    await clickMonth("Next month");
+    expect(container.querySelector("#practice-month")!.textContent).toBe(
+      "January 2026",
+    );
+    expect(
+      container.querySelector<HTMLButtonElement>(".practice-current-month")!
+        .disabled,
+    ).toBe(true);
+    await clickMonth("Next month");
+    expect(container.querySelector("#practice-month")!.textContent).toBe(
+      "February 2026",
+    );
+    expect(container.querySelectorAll(".practice-day")).toHaveLength(28);
+    expect(
+      container.querySelector('[aria-label="February 1: coming up"]'),
+    ).not.toBeNull();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(".practice-current-month")!
+        .click(),
+    );
+    expect(container.querySelector("#practice-month")!.textContent).toBe(
+      "January 2026",
+    );
+    expect(
+      container.querySelector(".is-today")!.getAttribute("aria-label"),
+    ).toBe("January 1, today: 2 of 5 minutes");
+    expect(onLearnerName).not.toHaveBeenCalled();
+    expect(onGoalMinutes).not.toHaveBeenCalled();
+  });
+
+  it("shows leap days and keeps a browsed month fixed across a change of day", async () => {
+    await render([], "2028-01-31");
+    await render([], "2028-02-01");
+    expect(container.querySelector("#practice-month")!.textContent).toBe(
+      "February 2028",
+    );
+    expect(container.querySelectorAll(".practice-day")).toHaveLength(29);
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Previous month"]')!
+        .click(),
+    );
+    await render([], "2028-03-01");
+    expect(container.querySelector("#practice-month")!.textContent).toBe(
+      "January 2028",
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(".practice-current-month")!
+        .click(),
+    );
+    expect(container.querySelector("#practice-month")!.textContent).toBe(
+      "March 2028",
     );
   });
 

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
-import { addDays, streak } from "./practiceLog";
+import { addDays, localDay, streak } from "./practiceLog";
 import { DAILY_GOAL_CHOICES, LEARNER_NAME_MAX } from "./storage";
 
 const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];
@@ -69,7 +69,7 @@ export function useLocalDay(today: () => string) {
 }
 
 /**
- * This month's practice: a star on each day with at least the daily goal, a
+ * A browsable month of practice: a star on each day with at least the daily goal, a
  * dot on days with some practice, and a ring filling up for today. Each week
  * ends with a stamp, coloured in once all seven days have their star. Today's
  * star pops when the goal is met while the studio is open. The learner's name
@@ -96,6 +96,8 @@ export const PracticeCalendar = memo(function PracticeCalendar({
   const todaySeconds = totals.get(today) ?? 0;
   const [celebrating, setCelebrating] = useState(false);
   const [editing, setEditing] = useState(false);
+  // null follows today's month across midnight; a browsed month stays put.
+  const [viewedMonth, setViewedMonth] = useState<string | null>(null);
   const before = useRef(todaySeconds);
   useEffect(() => {
     // Only practice earns the celebration, not a goal lowered past today.
@@ -108,14 +110,21 @@ export const PracticeCalendar = memo(function PracticeCalendar({
     return () => clearTimeout(timer);
   }, [celebrating]);
 
-  const [year, month] = today.split("-").map(Number);
+  const currentMonth = today.slice(0, 7);
+  const calendarMonth = viewedMonth ?? currentMonth;
+  const [year, month] = calendarMonth.split("-").map(Number);
   const first = new Date(year, month - 1, 1);
   const monthName = first.toLocaleDateString("en-US", { month: "long" });
+  const monthLabel = `${monthName} ${year}`;
+  const moveMonth = (offset: number) => {
+    const next = localDay(new Date(year, month - 1 + offset, 1)).slice(0, 7);
+    setViewedMonth(next === currentMonth ? null : next);
+  };
   // Weeks start on Monday.
   const blanks = (first.getDay() + 6) % 7;
   const dates = Array.from(
     { length: new Date(year, month, 0).getDate() },
-    (_, i) => addDays(`${today.slice(0, 8)}01`, i),
+    (_, i) => addDays(`${calendarMonth}-01`, i),
   );
   // One row per week, Monday to Sunday; a week can reach into the months
   // around this one, and its stamp counts those days too.
@@ -187,13 +196,47 @@ export const PracticeCalendar = memo(function PracticeCalendar({
     >
       {name && <p className="practice-learner">{name}’s practice</p>}
       <div className="practice-calendar-head">
-        <strong id="practice-month">{monthName}</strong>
+        <div
+          className="practice-month-nav"
+          role="group"
+          aria-label="Calendar months"
+        >
+          <button
+            type="button"
+            aria-label="Previous month"
+            onClick={() => moveMonth(-1)}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m12 5-5 5 5 5" />
+            </svg>
+          </button>
+          <strong id="practice-month" aria-live="polite" aria-atomic="true">
+            {monthLabel}
+          </strong>
+          <button
+            type="button"
+            aria-label="Next month"
+            onClick={() => moveMonth(1)}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m8 5 5 5-5 5" />
+            </svg>
+          </button>
+        </div>
         {run > 0 && (
           <span className="practice-streak">
             <Star />
             {run}-day streak
           </span>
         )}
+        <button
+          type="button"
+          className="practice-current-month"
+          disabled={calendarMonth === currentMonth}
+          onClick={() => setViewedMonth(null)}
+        >
+          Today
+        </button>
       </div>
       <div className="practice-days" role="list">
         {WEEKDAYS.map((name, i) => (
@@ -207,11 +250,11 @@ export const PracticeCalendar = memo(function PracticeCalendar({
           const stars = week.filter((d) => (totals.get(d) ?? 0) >= goal).length;
           const earned = stars === 7;
           const stampLabel = `Week of ${monthName} ${Number(
-            week.find((d) => d.slice(0, 7) === today.slice(0, 7))!.slice(8),
+            week.find((d) => d.slice(0, 7) === calendarMonth)!.slice(8),
           )}: ${earned ? "stamp earned" : `${stars} of 7 stars`}`;
           return [
             ...week.map((d) =>
-              d.slice(0, 7) === today.slice(0, 7) ? (
+              d.slice(0, 7) === calendarMonth ? (
                 dayCell(d)
               ) : (
                 <span key={d} aria-hidden="true" />

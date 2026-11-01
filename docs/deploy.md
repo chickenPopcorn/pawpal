@@ -50,6 +50,20 @@ repository admin turns it on:
 4. Save the ruleset. Pull requests then show **Merge when ready**, which adds
    them to the queue.
 
+## Security review receipts
+
+Some Codex Security Review runs complete with blank findings flags in the
+summary and publish their explicit result as a PR conversation comment. The
+gate accepts the known “no security issues” receipt only from the verified
+Codex app, within the current security run's recorded time window. GitHub must
+resolve the receipt's abbreviated commit to the exact PR head, and every Codex
+finding thread must be resolved. Missing, edited, stale, contradictory or
+unrecognized receipts do not pass. A completed review alone is insufficient.
+
+All status-writing runs execute the gate from the trusted default branch,
+including manual dispatches. PR branch code never receives the status-writing
+client.
+
 ## Verification
 
 See [the verification record](verification.md) for checks run, limitations, and

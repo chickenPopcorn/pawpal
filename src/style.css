@@ -395,7 +395,7 @@ span.device {
 }
 /* Whose practice it is: the calendar's title, with the month beneath. */
 .practice-learner {
-  margin: 0;
+  margin: 0 0 4px;
   font-size: 20px;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -422,6 +422,53 @@ span.device {
   font-weight: 400;
   letter-spacing: -0.02em;
   line-height: 1.2;
+}
+.practice-month-nav {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.practice-month-nav strong {
+  text-align: center;
+  white-space: nowrap;
+}
+.practice-month-nav button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  line-height: 1;
+}
+.practice-month-nav svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.practice-month-nav button:hover {
+  color: var(--text);
+  background: #eee8fa;
+}
+.practice-current-month {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+.practice-current-month:disabled {
+  opacity: 0.5;
 }
 .practice-streak {
   display: flex;

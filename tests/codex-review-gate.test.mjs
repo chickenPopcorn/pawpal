@@ -157,7 +157,11 @@ function setup(comments = [], events = [], statuses = []) {
     rest: {
       pulls: { get, listCommentsForReview },
       issues: { listComments, listEvents },
-      repos: { createCommitStatus: publish, listCommitStatusesForRef },
+      repos: {
+        createCommitStatus: publish,
+        listCommitStatusesForRef,
+        getCommit: vi.fn().mockResolvedValue({ data: { sha: HEAD } }),
+      },
     },
     paginate: vi
       .fn()
@@ -1553,4 +1557,256 @@ describe("Codex review merge gate", () => {
       );
     },
   );
+});
+
+describe("Security Review issue-comment receipts", () => {
+  const CREATED = "2026-10-17T06:02:59Z";
+  const state = () => ({
+    code_review: cleanReview(),
+    security_review: {
+      ...cleanReview(),
+      has_any_findings: null,
+      has_unresolved_findings: null,
+    },
+  });
+  const cleanReceipt = (overrides = {}) => ({
+    ...summary(undefined, 30, CREATED),
+    created_at: CREATED,
+    body: `<!-- codex-review-receipt:v1 -->\n\n### 🛡️ Codex Security Review\n\nSecurity review completed. No security issues were found in this pull request.\n\n**Reviewed commit:** \`${HEAD.slice(0, 10)}\`\n\n[View security finding report](https://chatgpt.com/codex/cloud/tasks/task_e_example)\n\n_Only the user who started this review can view the report in Codex._\n\n<details>More information</details>`,
+    ...overrides,
+  });
+  const fixture = (
+    receipts = [cleanReceipt()],
+    reviewState = state(),
+    cp = { rs: Date.parse(START) },
+  ) => {
+    const f = setup(
+      [withTimes(reviewState), ...receipts],
+      [],
+      [checkpoint(cp)],
+    );
+    f.github.graphql.mockResolvedValue(threadPage([]));
+    return f;
+  };
+
+  it("accepts the explicit trusted clean receipt after resolving its abbreviated commit", async () => {
+    const f = fixture();
+    await expect(f.run()).resolves.toMatchObject({
+      state: "success",
+      sha: HEAD,
+    });
+    expect(f.github.rest.repos.getCommit).toHaveBeenCalledExactlyOnceWith({
+      owner: "chickenPopcorn",
+      repo: "pawpal",
+      ref: HEAD.slice(0, 10),
+    });
+    expect(f.github.graphql).toHaveBeenCalledWith(
+      expect.stringContaining("query securityReceiptThreads"),
+      { owner: "chickenPopcorn", name: "pawpal", number: 7, cursor: null },
+    );
+  });
+
+  it("does not interpret completion without a receipt as clean", async () => {
+    const f = fixture([]);
+    await expect(f.run()).resolves.toMatchObject({ state: "pending" });
+    expect(f.github.rest.repos.getCommit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { user: { id: 123, login: "chatgpt-codex-connector[bot]", type: "Bot" } },
+    { user: { id: 199175422, login: "attacker", type: "Bot" } },
+    {
+      user: {
+        id: 199175422,
+        login: "chatgpt-codex-connector[bot]",
+        type: "User",
+      },
+    },
+    { performed_via_github_app: { id: 123, slug: "chatgpt-codex-connector" } },
+    { performed_via_github_app: { id: 1144995, slug: "other" } },
+    { created_at: BEFORE, updated_at: BEFORE },
+    { created_at: "2026-10-17T06:04:00Z", updated_at: "2026-10-17T06:04:00Z" },
+    { updated_at: FINISH },
+  ])(
+    "rejects untrusted, stale, future or edited receipts: %j",
+    async (overrides) => {
+      const f = fixture([cleanReceipt(overrides)]);
+      await expect(f.run()).resolves.toMatchObject({ state: "pending" });
+      expect(f.github.rest.repos.getCommit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    (body) =>
+      body.replace("### 🛡️ Codex Security Review", "### Codex Code Review"),
+    (body) =>
+      body.replace(
+        "### 🛡️ Codex Security Review",
+        "    ### 🛡️ Codex Security Review",
+      ),
+    (body) =>
+      body.replace(
+        "No security issues were found",
+        "Some security issues were found",
+      ),
+    (body) => body.replace("**Reviewed commit:**", "**Suggested commit:**"),
+    (body) => body.replace(HEAD.slice(0, 10), HEAD.slice(0, 7)),
+    (body) => body.replace("https://chatgpt.com/", "https://attacker.example/"),
+    (body) =>
+      body.replace(
+        "\n\n<details>",
+        "\nA security finding remains unresolved.\n\n<details>",
+      ),
+    (body) =>
+      body.replace(
+        "<!-- codex-review-receipt:v1 -->",
+        "Quoted: <!-- codex-review-receipt:v1 -->",
+      ),
+  ])("rejects unknown or contradictory receipt bodies %#", async (change) => {
+    const receipt = cleanReceipt();
+    receipt.body = change(receipt.body);
+    const f = fixture([receipt]);
+    await expect(f.run()).resolves.toMatchObject({ state: "pending" });
+  });
+
+  it("does not revive an earlier clean receipt after a newer unknown result", async () => {
+    const old = cleanReceipt({
+      id: 29,
+      created_at: "2026-10-17T06:02:58Z",
+      updated_at: "2026-10-17T06:02:58Z",
+    });
+    const latest = cleanReceipt();
+    latest.body = latest.body.replace(
+      "No security issues were found",
+      "Security issues were found",
+    );
+    await expect(fixture([old, latest]).run()).resolves.toMatchObject({
+      state: "pending",
+    });
+  });
+
+  it("does not reuse an older clean receipt when a newer security receipt changes its heading", async () => {
+    const old = cleanReceipt({
+      id: 29,
+      created_at: "2026-10-17T06:02:58Z",
+      updated_at: "2026-10-17T06:02:58Z",
+    });
+    const latest = cleanReceipt();
+    latest.body = latest.body.replace(
+      "### 🛡️ Codex Security Review",
+      "## Security Review result",
+    );
+    await expect(fixture([old, latest]).run()).resolves.toMatchObject({
+      state: "pending",
+    });
+  });
+
+  it.each([
+    { rs: 0 },
+    { rs: Date.parse(BEFORE), s: Date.parse(REQUEST) },
+    { rs: Date.parse(BEFORE), b: Date.parse(REQUEST) },
+  ])("requires a fresh observed security-review start: %j", async (cp) => {
+    const f = fixture(undefined, undefined, cp);
+    await expect(f.run()).resolves.toMatchObject({ state: "pending" });
+    expect(f.github.rest.repos.getCommit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "running" },
+    { status: "failed" },
+    { commit_sha: OLD_HEAD },
+    { has_any_findings: true },
+    { has_unresolved_findings: true },
+    { has_unresolved_findings: undefined },
+  ])(
+    "does not override missing, adverse or stale security metadata: %j",
+    async (patch) => {
+      const s = state();
+      Object.assign(s.security_review, patch);
+      const f = fixture(undefined, s);
+      await expect(f.run()).resolves.toMatchObject({
+        state:
+          patch.status === "failed" || patch.has_unresolved_findings === true
+            ? "failure"
+            : "pending",
+      });
+      expect(f.github.rest.repos.getCommit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a commit abbreviation that resolves to another full SHA", async () => {
+    const f = fixture();
+    f.github.rest.repos.getCommit.mockResolvedValue({
+      data: { sha: OLD_HEAD },
+    });
+    await expect(f.run()).resolves.toMatchObject({ state: "pending" });
+    expect(f.github.graphql).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when GitHub cannot resolve the commit", async () => {
+    const f = fixture();
+    f.github.rest.repos.getCommit.mockRejectedValue(new Error("Ambiguous SHA"));
+    await expect(f.run()).rejects.toThrow("Ambiguous SHA");
+    expect(f.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: "failure" }),
+    );
+  });
+
+  it("checks later thread pages and blocks unresolved old findings", async () => {
+    const f = fixture();
+    f.github.graphql
+      .mockResolvedValueOnce(threadPage([], true, "next"))
+      .mockResolvedValueOnce(
+        threadPage([reviewThread({ isResolved: false, isOutdated: true })]),
+      );
+    await expect(f.run()).resolves.toMatchObject({ state: "failure" });
+    expect(f.github.graphql).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { errors: { message: "Partial" }, ...threadPage([]) },
+    threadPage([], true, null),
+    threadPage([{}]),
+  ])("fails closed on incomplete thread responses %#", async (response) => {
+    const f = fixture();
+    f.github.graphql.mockResolvedValue(response);
+    await expect(f.run()).rejects.toThrow(/Security Review/);
+    expect(f.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: "failure" }),
+    );
+  });
+
+  it("accepts a trusted receipt from the webhook before REST sees it", async () => {
+    const f = fixture([]);
+    f.context.payload.action = "created";
+    f.context.payload.comment = cleanReceipt();
+    await expect(f.run()).resolves.toMatchObject({ state: "success" });
+  });
+
+  it("removes a deleted receipt even while REST still lists it", async () => {
+    const f = fixture();
+    f.context.payload.action = "deleted";
+    f.context.payload.comment = cleanReceipt();
+    await expect(f.run()).resolves.toMatchObject({ state: "pending" });
+  });
+
+  it("never publishes success for a head that changed during verification", async () => {
+    const f = fixture();
+    const original = f.github.rest.repos.getCommit.getMockImplementation();
+    f.github.rest.repos.getCommit.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      f.pullRequest.head = { sha: OLD_HEAD };
+      return result;
+    });
+    await expect(f.run()).resolves.toMatchObject({
+      state: "pending",
+      sha: OLD_HEAD,
+    });
+    expect(f.publish).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: "Codex review gate",
+        state: "success",
+      }),
+    );
+  });
 });
