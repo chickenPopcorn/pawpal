@@ -1641,6 +1641,11 @@ describe("Security Review issue-comment receipts", () => {
       body.replace("### 🛡️ Codex Security Review", "### Codex Code Review"),
     (body) =>
       body.replace(
+        "### 🛡️ Codex Security Review",
+        "    ### 🛡️ Codex Security Review",
+      ),
+    (body) =>
+      body.replace(
         "No security issues were found",
         "Some security issues were found",
       ),
@@ -1674,6 +1679,22 @@ describe("Security Review issue-comment receipts", () => {
     latest.body = latest.body.replace(
       "No security issues were found",
       "Security issues were found",
+    );
+    await expect(fixture([old, latest]).run()).resolves.toMatchObject({
+      state: "pending",
+    });
+  });
+
+  it("does not reuse an older clean receipt when a newer security receipt changes its heading", async () => {
+    const old = cleanReceipt({
+      id: 29,
+      created_at: "2026-10-17T06:02:58Z",
+      updated_at: "2026-10-17T06:02:58Z",
+    });
+    const latest = cleanReceipt();
+    latest.body = latest.body.replace(
+      "### 🛡️ Codex Security Review",
+      "## Security Review result",
     );
     await expect(fixture([old, latest]).run()).resolves.toMatchObject({
       state: "pending",

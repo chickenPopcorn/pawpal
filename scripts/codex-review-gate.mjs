@@ -349,7 +349,7 @@ async function securityReceiptResolution(
     (comment) =>
       isTrustedCodexComment(comment) &&
       comment.body.trimStart().startsWith("<!-- codex-review-receipt:v1 -->") &&
-      /^### 🛡️ Codex Security Review\s*$/m.test(comment.body),
+      /security review/i.test(comment.body),
   );
   for (const receipt of receipts) {
     if (
@@ -378,8 +378,8 @@ async function securityReceiptResolution(
     .trim()
     .split("<details>")[0]
     .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim());
   const commit = /^\*\*Reviewed commit:\*\* `([a-f0-9]{10,40})`$/.exec(
     lines[3] ?? "",
   );
