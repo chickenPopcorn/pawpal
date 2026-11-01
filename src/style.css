@@ -551,6 +551,9 @@ span.device {
 .practice-day.future {
   color: #b9b4c6;
 }
+.practice-day.outside-month {
+  opacity: 0.45;
+}
 .practice-day.is-today {
   font-weight: 700;
   color: var(--text);
