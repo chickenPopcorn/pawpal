@@ -40,10 +40,12 @@ jobs:
       cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
     runs-on: ubuntu-latest
     steps:
-      # Never check out a PR head: this workflow has permission to publish statuses.
+      # Webhooks always use trusted default-branch code, never a PR head.
+      # A maintainer's manual dispatch explicitly authorizes the chosen immutable
+      # workflow revision, so a reviewed gate fix can bootstrap itself.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
           persist-credentials: false
       - uses: actions/github-script@v7
         with:

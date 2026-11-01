@@ -188,14 +188,20 @@ function pullRequestNumber(context) {
   return number;
 }
 
-function isTrustedSummary(comment) {
+function isTrustedCodexComment(comment) {
   return (
     comment.user?.id === TRUSTED_BOT.id &&
     comment.user?.login === TRUSTED_BOT.login &&
     comment.user?.type === TRUSTED_BOT.type &&
     comment.performed_via_github_app?.id === TRUSTED_BOT.appId &&
     comment.performed_via_github_app?.slug === TRUSTED_BOT.appSlug &&
-    typeof comment.body === "string" &&
+    typeof comment.body === "string"
+  );
+}
+
+function isTrustedSummary(comment) {
+  return (
+    isTrustedCodexComment(comment) &&
     comment.body.trimStart().startsWith(SUMMARY_MARKER)
   );
 }
@@ -229,6 +235,7 @@ function evaluateSummary(
   sha,
   checkpoint,
   codeThreadsResolved = false,
+  securityReceiptVerified = false,
 ) {
   const pending = {
     state: "pending",
@@ -240,7 +247,9 @@ function evaluateSummary(
   const reviews = kinds.map((kind) =>
     kind === "code_review" && codeThreadsResolved
       ? { ...state[kind], has_unresolved_findings: false }
-      : state[kind],
+      : kind === "security_review" && securityReceiptVerified
+        ? { ...state[kind], has_unresolved_findings: false }
+        : state[kind],
   );
   // An older clean result must never satisfy a newer commit or a split review.
   if (reviews.some((review) => !review || review.commit_sha !== sha))
@@ -282,7 +291,12 @@ function evaluateSummary(
   return pending;
 }
 
-function needsThreadResolution(summary, sha, checkpoint) {
+function needsThreadResolution(
+  summary,
+  sha,
+  checkpoint,
+  securityReceiptVerified,
+) {
   const state = summaryState(summary);
   const code = state?.code_review;
   const security = state?.security_review;
@@ -294,9 +308,160 @@ function needsThreadResolution(summary, sha, checkpoint) {
     checkpoint.rc > 0 &&
     security?.commit_sha === sha &&
     security.status === "completed" &&
-    security.has_unresolved_findings === false &&
-    evaluateSummary(summary, sha, checkpoint, true).state === "success"
+    (security.has_unresolved_findings === false || securityReceiptVerified) &&
+    evaluateSummary(summary, sha, checkpoint, true, securityReceiptVerified)
+      .state === "success"
   );
+}
+
+/**
+ * Newer Security Review runs leave the summary's findings flags null and post
+ * a clean receipt as an issue comment instead. Accept only the observed clean
+ * receipt format, from the same app as the summary and within this run's
+ * recorded start/completion window. Unknown formats remain pending.
+ */
+async function securityReceiptResolution(
+  github,
+  repo,
+  number,
+  sha,
+  summary,
+  checkpoint,
+  comments,
+) {
+  const security = summaryState(summary)?.security_review;
+  const started = checkpoint.rs;
+  const completed = summary && reviewTime(summary, "security_review");
+  if (
+    security?.commit_sha !== sha ||
+    security.status !== "completed" ||
+    security.has_any_findings !== null ||
+    security.has_unresolved_findings !== null ||
+    !(started > 0) ||
+    started <= Math.max(checkpoint.b, checkpoint.s) ||
+    !(completed >= started)
+  )
+    return undefined;
+
+  // Take the latest Security Review receipt, not the latest *clean* one.
+  // A newer, unknown result must not revive an older clean result.
+  const receipts = comments.filter(
+    (comment) =>
+      isTrustedCodexComment(comment) &&
+      comment.body.trimStart().startsWith("<!-- codex-review-receipt:v1 -->") &&
+      /^### 🛡️ Codex Security Review\s*$/m.test(comment.body),
+  );
+  for (const receipt of receipts) {
+    if (
+      !Number.isSafeInteger(receipt.id) ||
+      receipt.id <= 0 ||
+      !Date.parse(receipt.created_at) ||
+      !Date.parse(receipt.updated_at)
+    )
+      throw new Error("Incomplete Security Review receipt metadata.");
+  }
+  receipts.sort(
+    (a, b) =>
+      Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id,
+  );
+  const receipt = receipts[0];
+  if (!receipt) return "pending";
+  const created = Date.parse(receipt.created_at);
+  if (
+    created < started ||
+    created > completed ||
+    receipt.updated_at !== receipt.created_at
+  )
+    return "pending";
+
+  const lines = receipt.body
+    .trim()
+    .split("<details>")[0]
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const commit = /^\*\*Reviewed commit:\*\* `([a-f0-9]{10,40})`$/.exec(
+    lines[3] ?? "",
+  );
+  if (
+    lines.length !== 6 ||
+    lines[0] !== "<!-- codex-review-receipt:v1 -->" ||
+    lines[1] !== "### 🛡️ Codex Security Review" ||
+    lines[2] !==
+      "Security review completed. No security issues were found in this pull request." ||
+    !commit ||
+    !/^\[View security finding report\]\(https:\/\/chatgpt\.com\/codex\/cloud\/tasks\/task_e_[A-Za-z0-9_-]+\)$/.test(
+      lines[4],
+    ) ||
+    lines[5] !==
+      "_Only the user who started this review can view the report in Codex._"
+  )
+    return "pending";
+
+  // Never match an abbreviated SHA by prefix alone: GitHub must resolve it
+  // unambiguously to this PR's full head SHA.
+  const { data: reviewed } = await github.rest.repos.getCommit({
+    ...repo,
+    ref: commit[1],
+  });
+  if (typeof reviewed?.sha !== "string")
+    throw new Error("Incomplete reviewed commit response.");
+  if (reviewed.sha !== sha) return "pending";
+
+  const query = `query securityReceiptThreads($owner:String!,$name:String!,$number:Int!,$cursor:String) {
+    repository(owner:$owner,name:$name) {
+      pullRequest(number:$number) {
+        reviewThreads(first:100,after:$cursor) {
+          nodes {
+            isResolved
+            comments(first:1) {
+              nodes { author { __typename login ... on Bot { databaseId } } }
+            }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }`;
+  let cursor = null;
+  const seen = new Set();
+  do {
+    const response = await github.graphql(query, {
+      owner: repo.owner,
+      name: repo.repo,
+      number,
+      cursor,
+    });
+    const threads = response?.repository?.pullRequest?.reviewThreads;
+    if (
+      (response?.errors &&
+        (!Array.isArray(response.errors) || response.errors.length > 0)) ||
+      !Array.isArray(threads?.nodes) ||
+      typeof threads.pageInfo?.hasNextPage !== "boolean"
+    )
+      throw new Error("Incomplete Security Review thread response.");
+    for (const thread of threads.nodes) {
+      const roots = thread?.comments?.nodes;
+      const author = roots?.[0]?.author;
+      if (
+        typeof thread?.isResolved !== "boolean" ||
+        !Array.isArray(roots) ||
+        roots.length !== 1 ||
+        typeof author?.__typename !== "string" ||
+        typeof author.login !== "string" ||
+        (author.__typename === "Bot" &&
+          !Number.isSafeInteger(author.databaseId))
+      )
+        throw new Error("Incomplete Security Review thread author.");
+      if (isCodexActor(author) && !thread.isResolved) return "failure";
+    }
+    if (!threads.pageInfo.hasNextPage) break;
+    cursor = threads.pageInfo.endCursor;
+    if (typeof cursor !== "string" || !cursor || seen.has(cursor))
+      throw new Error("Incomplete Security Review thread pagination.");
+    seen.add(cursor);
+  } while (true);
+  return "success";
 }
 
 function isCodexActor(author) {
@@ -615,6 +780,7 @@ export async function runCodexReviewGate(
   let summary;
   let checkpoint;
   let threadResolution;
+  let securityResolution;
   try {
     const parameters = { ...repo, issue_number: number, per_page: 100 };
     const [comments, events, statuses] = await Promise.all([
@@ -649,8 +815,44 @@ export async function runCodexReviewGate(
     if (
       pullRequest.state === "open" &&
       pullRequest.base?.ref === "main" &&
+      pullRequest.head.sha === initialSha
+    ) {
+      const receiptComments = new Map(
+        comments.map((comment) => [comment.id, comment]),
+      );
+      const current = context.payload.comment;
+      if (context.payload.action === "deleted")
+        receiptComments.delete(current?.id);
+      else if (current) {
+        const listed = receiptComments.get(current.id);
+        if (
+          !listed ||
+          Date.parse(current.updated_at) >= Date.parse(listed.updated_at)
+        )
+          receiptComments.set(current.id, current);
+      }
+      securityResolution = await securityReceiptResolution(
+        github,
+        repo,
+        number,
+        initialSha,
+        summary,
+        checkpoint,
+        [...receiptComments.values()],
+      );
+      if (securityResolution !== undefined)
+        ({ data: pullRequest } = await getPullRequest());
+    }
+    if (
+      pullRequest.state === "open" &&
+      pullRequest.base?.ref === "main" &&
       pullRequest.head.sha === initialSha &&
-      needsThreadResolution(summary, initialSha, checkpoint)
+      needsThreadResolution(
+        summary,
+        initialSha,
+        checkpoint,
+        securityResolution === "success",
+      )
     ) {
       // Some connector versions emit null after findings are resolved, or
       // for a clean review. Only those states may fall back to complete,
@@ -687,7 +889,7 @@ export async function runCodexReviewGate(
       description:
         "Pull request changed; waiting for Codex reviews of the new commit.",
     });
-  if (threadResolution === "failure")
+  if (threadResolution === "failure" || securityResolution === "failure")
     return publish(
       {
         state: "failure",
@@ -716,6 +918,7 @@ export async function runCodexReviewGate(
       initialSha,
       checkpoint,
       threadResolution === "success",
+      securityResolution === "success",
     ),
     summary?.html_url,
   );
