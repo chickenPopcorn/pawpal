@@ -60,13 +60,9 @@ resolve the receipt's abbreviated commit to the exact PR head, and every Codex
 finding thread must be resolved. Missing, edited, stale, contradictory or
 unrecognized receipts do not pass. A completed review alone is insufficient.
 
-Webhook runs always execute the gate from the default branch. For a reviewed
-gate repair that needs to run before it can merge, a maintainer can manually
-dispatch `codex-review-gate.yml` on the repair branch, with
-`pull_request_number` set to its PR. Only this explicit dispatch uses the
-selected workflow revision, pinned to `github.sha`; webhook events never run
-PR code with permission to publish statuses. Check the selected revision and
-its tests before dispatching.
+All status-writing runs execute the gate from the trusted default branch,
+including manual dispatches. PR branch code never receives the status-writing
+client.
 
 ## Verification
 
