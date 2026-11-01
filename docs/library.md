@@ -7,10 +7,11 @@ signed-in users can read it (see [who can read the buckets](#who-can-read-the-bu
 The app loads them after sign-in:
 
 - `index.json` lists the songs in order, with each one's title, collection
-  (`classes`, `movies`, `songs` or `pops`) and file names. The app loads
-  `classes`, George Bear’s Classes, and `movies`, Movie Themes; the bucket also
-  keeps the other two collections. A `classes` song may name its `book`:
-  `recital-3` (the default) or `lesson-3`. Movie Themes is one book.
+  (`classes`, `movies`, `classical`, `songs` or `pops`) and file names. The app loads
+  `classes`, George Bear’s Classes; `movies`, Movie Themes; and `classical`,
+  Classical. The bucket also keeps the other two collections. A `classes` song
+  may name its `book`: `recital-3` (the default) or `lesson-3`. Movie Themes and
+  Classical are each one book.
   Browsers check the index on every load; it is cached for 60 seconds.
 - `songs/<id>.<hash>.json` is each song in the app's format: notes, tracks,
   tempo, suggested fingering and lesson text, and for Recital Book 3 the
@@ -38,7 +39,7 @@ since a plain link would not carry the token.
 To change the library, run `npm run library:pull`, edit `./library` (ignored by
 git), then run `npm run library:push`. To add a song, put its MIDI file at
 `library/songs/<id>.mid` and add an entry to `library/index.json` with its `id`,
-`title`, `collection` (`"classes"` or `"movies"`), for a class song an optional
+`title`, `collection` (`"classes"`, `"movies"` or `"classical"`), for a class song an optional
 `book`, `song: "songs/<id>.json"` and `midi: "songs/<id>.mid"`; push converts
 the MIDI into the song file. A build of the app rejects an index that names a
 collection it does not know, so push a song in a new collection only once the
@@ -53,6 +54,21 @@ each file left). Pulling and pushing both need the project's secret key, in
 `SUPABASE_SECRET_KEY`, or a Supabase account token in `MUSIC_API_KEY` to look it
 up (`scripts/supabase-admin.mjs`). The app itself only reads the bucket. A copy
 of three songs in `tests/fixtures/` serves the tests.
+
+## Passacaglia excerpt
+
+`node scripts/create-passacaglia.mjs` writes
+`library/songs/passacaglia-excerpt-v1.mid`, a reproducible transcription of the
+22 complete measures visible in the supplied score image. It has separate
+left- and right-hand tracks, 4/4 meter at 130 BPM, and the right-hand 8va from
+bar 19. The image ends during the next variation; missing pages are not
+reconstructed. The library title is **Passacaglia (opening excerpt)**, in
+`classical`. No finger numbers are supplied. An optional output path lets the
+script generate a MIDI without touching the library.
+
+Publish the build that recognizes `classical` before adding this entry to the
+live index, following the cache wait above. Older builds reject unknown
+collections.
 
 ## The course CD's audio
 

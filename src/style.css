@@ -423,6 +423,43 @@ span.device {
   letter-spacing: -0.02em;
   line-height: 1.2;
 }
+.practice-month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+}
+.practice-month-nav strong {
+  text-align: center;
+}
+.practice-month-nav button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 26px;
+}
+.practice-month-nav button:hover {
+  color: var(--text);
+  background: #eee8fa;
+}
+.practice-current-month {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+.practice-current-month:disabled {
+  opacity: 0.5;
+}
 .practice-streak {
   display: flex;
   align-items: center;

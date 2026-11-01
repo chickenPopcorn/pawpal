@@ -4,7 +4,7 @@ import type { Song } from "./song";
 /** George’s piano classes, the library's main collection. */
 export const CLASSES_TITLE = "George Bear’s Classes";
 
-/** One section per book, in this order: the class books, then Movie Themes. */
+/** Class books, followed by the standalone piano collections. */
 export const books = [
   {
     id: "recital-3",
@@ -26,6 +26,13 @@ export const books = [
     series: "Piano Solos",
     title: "Movie Themes",
     icon: "🎬",
+  },
+  {
+    id: "classical",
+    collection: "classical",
+    series: "Piano Solos",
+    title: "Classical",
+    icon: "🎼",
   },
 ] as const satisfies readonly {
   id: SongBook;

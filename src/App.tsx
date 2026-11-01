@@ -844,13 +844,17 @@ export function App({
                       <>
                         {studio.song.source.composer} ·{" "}
                         {studio.song.source.description}{" "}
-                        <a
-                          href={studio.song.source.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          MIDI by {studio.song.source.credit}
-                        </a>
+                        {studio.song.source.url ? (
+                          <a
+                            href={studio.song.source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            MIDI by {studio.song.source.credit}
+                          </a>
+                        ) : (
+                          studio.song.source.credit
+                        )}
                       </>
                     ) : studio.song.lesson ? (
                       `${studio.song.lesson.composer} · ${studio.song.lesson.description}`

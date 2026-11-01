@@ -9,7 +9,13 @@ const TIMEOUT_MS = 30000;
  * users may read it (see supabase/migrations).
  */
 export const LIBRARY_BUCKET = "library";
-export const COLLECTION_IDS = ["classes", "songs", "pops", "movies"] as const;
+export const COLLECTION_IDS = [
+  "classes",
+  "songs",
+  "pops",
+  "movies",
+  "classical",
+] as const;
 export type LibraryCollection = (typeof COLLECTION_IDS)[number];
 /** The books of George Bear’s Classes. */
 export const BOOK_IDS = ["recital-3", "lesson-3"] as const;
@@ -18,7 +24,7 @@ export type LibraryBook = (typeof BOOK_IDS)[number];
  * A book of the app's library: one of George Bear’s Classes, or Movie Themes,
  * the `movies` collection as one book.
  */
-export type SongBook = LibraryBook | "movies";
+export type SongBook = LibraryBook | "movies" | "classical";
 /** The book of a classes song that names none. */
 const DEFAULT_BOOK: LibraryBook = "recital-3";
 
@@ -26,7 +32,7 @@ const DEFAULT_BOOK: LibraryBook = "recital-3";
 export interface LibraryEntry {
   id: string;
   title: string;
-  /** The app shows `classes` and `movies`; the bucket keeps the others. */
+  /** The app shows classes, movie themes and classical pieces. */
   collection: LibraryCollection;
   /** The class book of a `classes` song: recital-3 when left out. */
   book?: LibraryBook;
@@ -392,7 +398,10 @@ export async function loadLibrary(
   const index = validateIndex(await get("index.json", true));
   // Earlier builds still show the other collections, so they stay in the bucket.
   const shown = index.songs.filter(
-    (entry) => entry.collection === "classes" || entry.collection === "movies",
+    (entry) =>
+      entry.collection === "classes" ||
+      entry.collection === "movies" ||
+      entry.collection === "classical",
   );
   if (!shown.some((entry) => entry.collection === "classes"))
     fail("index.json", "George Bear’s Classes has no songs");
@@ -404,8 +413,8 @@ export async function loadLibrary(
         title: entry.title,
         library: {
           book:
-            entry.collection === "movies"
-              ? "movies"
+            entry.collection === "movies" || entry.collection === "classical"
+              ? entry.collection
               : (entry.book ?? DEFAULT_BOOK),
           midi: entry.midi ? url(entry.midi) : undefined,
         },
