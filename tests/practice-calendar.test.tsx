@@ -46,6 +46,60 @@ afterEach(() => {
 });
 
 describe("practice calendar", () => {
+  it("shows adjacent-month days faded while preserving their practice marks", async () => {
+    await render(
+      [
+        ["2026-10-26", goal],
+        ["2026-10-27", 90],
+        ["2026-10-31", goal],
+      ],
+      "2026-11-01",
+    );
+    expect(container.querySelectorAll(".practice-day")).toHaveLength(42);
+    expect(container.querySelectorAll(".outside-month")).toHaveLength(12);
+    const previous = container.querySelector(
+      '[aria-label="October 26: 5 minutes, star earned"]',
+    )!;
+    expect(previous.classList.contains("outside-month")).toBe(true);
+    expect(previous.querySelector(".practice-star")).not.toBeNull();
+    const partial = container.querySelector(
+      '[aria-label="October 27: 1 minute"]',
+    )!;
+    expect(partial.classList.contains("outside-month")).toBe(true);
+    expect(partial.classList.contains("some")).toBe(true);
+    expect(
+      container
+        .querySelector('[aria-label="December 1: coming up"]')!
+        .classList.contains("outside-month"),
+    ).toBe(true);
+    const today = container.querySelector('[aria-current="date"]')!;
+    expect(today.getAttribute("aria-label")).toBe(
+      "November 1, today: 0 of 5 minutes",
+    );
+    expect(today.classList.contains("outside-month")).toBe(false);
+    expect(
+      container.querySelector(
+        '[aria-label="Week of November 1: 2 of 7 stars"]',
+      ),
+    ).not.toBeNull();
+  });
+
+  it("identifies adjacent dates from another year without relabeling them as the displayed month", async () => {
+    await render([["2025-12-31", goal]], "2026-01-01");
+    expect(
+      container
+        .querySelector(
+          '[aria-label="December 31, 2025: 5 minutes, star earned"]',
+        )!
+        .classList.contains("outside-month"),
+    ).toBe(true);
+    expect(
+      container
+        .querySelector('[aria-label="January 31: coming up"]')!
+        .classList.contains("outside-month"),
+    ).toBe(false);
+  });
+
   it("marks each day of the month by how much was practiced", async () => {
     await render([
       ["2026-10-14", 90],
@@ -59,7 +113,9 @@ describe("practice calendar", () => {
     );
     // October 2026 starts on a Thursday; weeks start on Monday, and each of
     // its five weeks ends with a stamp.
-    expect(container.querySelectorAll(".practice-day")).toHaveLength(31);
+    expect(
+      container.querySelectorAll(".practice-day:not(.outside-month)"),
+    ).toHaveLength(31);
     expect(container.querySelectorAll(".practice-stamp")).toHaveLength(5);
     expect(day(16).className).toContain("done");
     expect(day(16).getAttribute("aria-label")).toBe(
@@ -102,13 +158,15 @@ describe("practice calendar", () => {
     expect(container.querySelector("#practice-month")!.textContent).toBe(
       "December 2025",
     );
-    expect(container.querySelectorAll(".practice-day")).toHaveLength(31);
+    expect(
+      container.querySelectorAll(".practice-day:not(.outside-month)"),
+    ).toHaveLength(31);
     expect(
       container.querySelector(
         '[aria-label="December 31: 5 minutes, star earned"]',
       ),
     ).not.toBeNull();
-    expect(container.querySelector(".is-today")).toBeNull();
+    expect(container.querySelector(".is-today:not(.outside-month)")).toBeNull();
     expect(container.querySelector(".practice-today")!.textContent).toBe(
       "Today: 2 of 5 minutes",
     );
@@ -127,7 +185,9 @@ describe("practice calendar", () => {
     expect(container.querySelector("#practice-month")!.textContent).toBe(
       "February 2026",
     );
-    expect(container.querySelectorAll(".practice-day")).toHaveLength(28);
+    expect(
+      container.querySelectorAll(".practice-day:not(.outside-month)"),
+    ).toHaveLength(28);
     expect(
       container.querySelector('[aria-label="February 1: coming up"]'),
     ).not.toBeNull();
@@ -152,7 +212,9 @@ describe("practice calendar", () => {
     expect(container.querySelector("#practice-month")!.textContent).toBe(
       "February 2028",
     );
-    expect(container.querySelectorAll(".practice-day")).toHaveLength(29);
+    expect(
+      container.querySelectorAll(".practice-day:not(.outside-month)"),
+    ).toHaveLength(29);
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>('[aria-label="Previous month"]')!

@@ -138,6 +138,14 @@ export const PracticeCalendar = memo(function PracticeCalendar({
   const dayCell = (day: string) => {
     const seconds = totals.get(day) ?? 0;
     const date = Number(day.slice(8));
+    const outsideMonth = day.slice(0, 7) !== calendarMonth;
+    const dateLabel = outsideMonth
+      ? new Date(`${day}T12:00:00`).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          ...(day.slice(0, 4) !== String(year) && { year: "numeric" }),
+        })
+      : `${monthName} ${date}`;
     const isToday = day === today;
     const met = seconds >= goal;
     const state = met
@@ -149,7 +157,7 @@ export const PracticeCalendar = memo(function PracticeCalendar({
           : seconds > 0
             ? "some"
             : "";
-    const label = `${monthName} ${date}${isToday ? ", today" : ""}: ${
+    const label = `${dateLabel}${isToday ? ", today" : ""}: ${
       met
         ? `${plural(minutes(seconds), "minute")}, star earned`
         : isToday
@@ -165,8 +173,9 @@ export const PracticeCalendar = memo(function PracticeCalendar({
         key={day}
         role="listitem"
         aria-label={label}
+        aria-current={isToday ? "date" : undefined}
         title={label}
-        className={`practice-day ${state} ${isToday ? "is-today" : ""} ${
+        className={`practice-day ${outsideMonth ? "outside-month" : ""} ${state} ${isToday ? "is-today" : ""} ${
           isToday && celebrating ? "celebrate" : ""
         }`}
       >
@@ -253,13 +262,7 @@ export const PracticeCalendar = memo(function PracticeCalendar({
             week.find((d) => d.slice(0, 7) === calendarMonth)!.slice(8),
           )}: ${earned ? "stamp earned" : `${stars} of 7 stars`}`;
           return [
-            ...week.map((d) =>
-              d.slice(0, 7) === calendarMonth ? (
-                dayCell(d)
-              ) : (
-                <span key={d} aria-hidden="true" />
-              ),
-            ),
+            ...week.map(dayCell),
             <span
               key={`stamp-${monday}`}
               role="listitem"
