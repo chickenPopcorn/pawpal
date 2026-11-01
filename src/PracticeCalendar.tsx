@@ -206,7 +206,9 @@ export const PracticeCalendar = memo(function PracticeCalendar({
             aria-label="Previous month"
             onClick={() => moveMonth(-1)}
           >
-            <span aria-hidden="true">‹</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m12 5-5 5 5 5" />
+            </svg>
           </button>
           <strong id="practice-month" aria-live="polite" aria-atomic="true">
             {monthLabel}
@@ -216,7 +218,9 @@ export const PracticeCalendar = memo(function PracticeCalendar({
             aria-label="Next month"
             onClick={() => moveMonth(1)}
           >
-            <span aria-hidden="true">›</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m8 5 5 5-5 5" />
+            </svg>
           </button>
         </div>
         {run > 0 && (
